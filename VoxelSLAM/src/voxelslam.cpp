@@ -1877,9 +1877,9 @@ public:
   // note:回环检测线程(关键帧是在这里进行管理的)
   void thd_loop_closure(ros::NodeHandle &n)
   {
-    pl_kdmap.reset(new pcl::PointCloud<PointType>);
-    vector<STDescManager*> std_managers;
-    PGO_Edges lp_edges;
+    pl_kdmap.reset(new pcl::PointCloud<PointType>);    //用于历史关键帧位姿的 KD-tree 搜索
+    vector<STDescManager*> std_managers;               //每一个 session 对应一个 STDescManager
+    PGO_Edges lp_edges;                                //回环边集合（用于 PGO / iSAM2）
 
     double jud_default = 0.45, icp_eigval = 14;
     double ratio_drift = 0.05;
