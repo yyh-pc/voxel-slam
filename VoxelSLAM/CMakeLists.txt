@@ -29,7 +29,7 @@ find_package(GTSAM REQUIRED QUIET)
 # find_package(Ceres REQUIRED)
 
 catkin_package(
-  CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs 
+  CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs livox_ros_driver
   DEPENDS EIGEN3 PCL GTSAM
   INCLUDE_DIRS
 )
@@ -43,6 +43,12 @@ include_directories(
 )
 
 add_executable(voxelslam src/voxelslam.cpp src/BTC.cpp)
+
+add_dependencies(voxelslam
+  ${catkin_EXPORTED_TARGETS}
+  livox_ros_driver_gencpp
+)
+
 target_link_libraries(voxelslam ${catkin_LIBRARIES} ${PCL_LIBRARIES} gtsam)
 
 

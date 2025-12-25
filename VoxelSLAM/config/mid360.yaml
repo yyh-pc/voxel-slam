@@ -1,7 +1,7 @@
 General:
   lid_topic: "/livox/lidar"
   imu_topic: "/livox/imu"
-  save_path: "/home/zale/save_datas/"
+  save_path: "/home/nano/voxel/save_datas/"
   previous_map: ""
   bagname: "mid360_init"
   lidar_type: 0
