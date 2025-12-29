@@ -44,7 +44,7 @@ public:
       pcl_send.push_back(ap);
     }
     pub_pl_func(pcl_send, pub_scan);
-    
+
     Eigen::Vector3d pcurr = x_curr.p;
 
     PointType ap;
@@ -170,7 +170,7 @@ public:
       pl_save.push_back(ap);
     }
     string pcdname = savename + "/" + to_string(count) + ".pcd";
-    pcl::io::savePCDFileBinary(pcdname, pl_save); 
+    pcl::io::savePCDFileBinary(pcdname, pl_save);
   }
 
   void save_pose(vector<ScanPose*> &bbuf, string &fname, string posename, string &savepath)
@@ -214,7 +214,7 @@ public:
         stringstream ss(lineStr);
         while(ss >> str)
           sts.push_back(str);
-        
+
         int mp[2] = {-1, -1};
         for(int i=0; i<2; i++)
         for(int j=0; j<fnames.size(); j++)
@@ -228,7 +228,7 @@ public:
         {
           int id1 = stoi(sts[2]);
           int id2 = stoi(sts[3]);
-          Eigen::Vector3d v3; 
+          Eigen::Vector3d v3;
           v3 << stod(sts[4]), stod(sts[5]), stod(sts[6]);
           Eigen::Quaterniond qq(stod(sts[10]), stod(sts[7]), stod(sts[8]), stod(sts[9]));
           Eigen::Matrix3d rot(qq.matrix());
@@ -288,7 +288,7 @@ public:
       vector<string> strs;
       while(getline(ss2, str, ':'))
         strs.push_back(str);
-      
+
       if(strs.size() != 2)
       {
         printf("previous map name wrong\n");
@@ -337,10 +337,10 @@ public:
 
         xxbuf.push_back(xc);
         plbuf.push_back(pl_tem);
-        
+
         if(xxbuf.size() < win_size)
           continue;
-        
+
         pl_lc.clear();
         Keyframe *smp = new Keyframe(xc);
         smp->id = i;
@@ -364,13 +364,13 @@ public:
         for(PointType &pp: pl_lc.points)
           smp->plptr->push_back(pp);
         keyframes_tem->push_back(smp);
-        
+
         for(int j=0; j<win_size; j++)
         {
           plbuf.pop_front(); xxbuf.pop_front();
         }
       }
-      
+
       cout << "Generating BTC descriptors..." << "\n";
 
       int subsize = keyframes_tem->size();
@@ -446,7 +446,7 @@ public:
 
     printf("All the maps are loaded\n");
   }
-  
+
 };
 
 class Initialization
@@ -465,7 +465,7 @@ public:
     Eigen::Vector3d n1(0, 0, 1);
     if(n0[2] < 0)
       n1[2] = -1;
-    
+
     Eigen::Vector3d rotvec = n0.cross(n1);
     double rnorm = rotvec.norm();
     rotvec = rotvec / rnorm;
@@ -495,13 +495,13 @@ public:
     for(auto it_imu=imus.end()-1; it_imu!=imus.begin(); it_imu--)
     {
       sensor_msgs::Imu &head = **(it_imu-1);
-      sensor_msgs::Imu &tail = **(it_imu); 
-      
-      angvel_avr << 0.5*(head.angular_velocity.x + tail.angular_velocity.x), 
-                    0.5*(head.angular_velocity.y + tail.angular_velocity.y), 
+      sensor_msgs::Imu &tail = **(it_imu);
+
+      angvel_avr << 0.5*(head.angular_velocity.x + tail.angular_velocity.x),
+                    0.5*(head.angular_velocity.y + tail.angular_velocity.y),
                     0.5*(head.angular_velocity.z + tail.angular_velocity.z);
-      acc_avr << 0.5*(head.linear_acceleration.x + tail.linear_acceleration.x), 
-                 0.5*(head.linear_acceleration.y + tail.linear_acceleration.y), 
+      acc_avr << 0.5*(head.linear_acceleration.x + tail.linear_acceleration.x),
+                 0.5*(head.linear_acceleration.y + tail.linear_acceleration.y),
                  0.5*(head.linear_acceleration.z + tail.linear_acceleration.z);
 
       angvel_avr -= xc.bg;
@@ -765,7 +765,7 @@ public:
     vector<double> vecR(9), vecT(3);
     scanPoses = new vector<ScanPose*>();
     keyframes = new vector<Keyframe*>();
-    
+
     string lid_topic, imu_topic;
     n.param<string>("General/lid_topic", lid_topic, "/livox/lidar");
     n.param<string>("General/imu_topic", imu_topic, "/livox/imu");
@@ -806,7 +806,7 @@ public:
     odom_ekf.Lid_offset_to_IMU  << vecT[0], vecT[1], vecT[2];
     odom_ekf.Lid_rot_to_IMU << vecR[0], vecR[1], vecR[2],
                             vecR[3], vecR[4], vecR[5],
-                            vecR[6], vecR[7], vecR[8];                
+                            vecR[6], vecR[7], vecR[8];
     extrin_para.R = odom_ekf.Lid_rot_to_IMU;
     extrin_para.p = odom_ekf.Lid_offset_to_IMU;
     min_point << 5, 5, 5, 5;
@@ -826,10 +826,10 @@ public:
     // for(double &iter: plane_eigen_value_thre) iter = 1.0 / iter;
 
     noiseMeas.setZero(); noiseWalk.setZero();
-    noiseMeas.diagonal() << cov_gyr, cov_gyr, cov_gyr, 
+    noiseMeas.diagonal() << cov_gyr, cov_gyr, cov_gyr,
                             cov_acc, cov_acc, cov_acc;
-    noiseWalk.diagonal() << 
-    rand_walk_gyr, rand_walk_gyr, rand_walk_gyr, 
+    noiseWalk.diagonal() <<
+    rand_walk_gyr, rand_walk_gyr, rand_walk_gyr,
     rand_walk_acc, rand_walk_acc, rand_walk_acc;
 
     int ss = 0;
@@ -844,7 +844,7 @@ public:
     if(ss != 0 && is_save_map == 1)
     {
       printf("The pointcloud will be saved in this run.\n");
-      printf("So please clear or rename the existed folder.\n"); 
+      printf("So please clear or rename the existed folder.\n");
       exit(0);
     }
 
@@ -855,8 +855,9 @@ public:
   // The point-to-plane alignment for odometry
   bool lio_state_estimation(PVecPtr pptr)
   {
+    // IMU 预测状态
     IMUST x_prop = x_curr;
-
+    // 最多迭代4次
     const int num_max_iter = 4;
     bool EKF_stop_flg = 0, flg_EKF_converged = 0;
     Eigen::Matrix<double, DIM, DIM> G, H_T_H, I_STATE;
@@ -868,7 +869,7 @@ public:
     vector<OctoTree*> octos;
     octos.resize(psize, nullptr);
 
-    Eigen::Matrix3d nnt; 
+    Eigen::Matrix3d nnt;
     Eigen::Matrix<double, DIM, DIM> cov_inv = x_curr.cov.inverse();
     for(int iterCount=0; iterCount<num_max_iter; iterCount++)
     {
@@ -896,6 +897,7 @@ public:
         }
         else
         {
+          // 点到平面匹配
           flag = match(surf_map, wld, pla, var_world, sigma_d, octos[i]);
         }
 
@@ -904,8 +906,10 @@ public:
         {
           Plane &pp = *pla;
           double R_inv = 1.0 / (0.0005 + sigma_d);
+          // 点到平面残差
           double resi = pp.normal.dot(wld - pp.center);
 
+          // 残差雅克比
           Eigen::Matrix<double, 6, 1> jac;
           jac.head(3) = phat * x_curr.R.transpose() * pp.normal;
           jac.tail(3) = pp.normal;
@@ -930,11 +934,11 @@ public:
       EKF_stop_flg = false;
       flg_EKF_converged = false;
 
-      if ((rot_add.norm() * 57.3 < 0.01) && (tra_add.norm() * 100 < 0.015)) 
+      if ((rot_add.norm() * 57.3 < 0.01) && (tra_add.norm() * 100 < 0.015))
         flg_EKF_converged = true;
 
       if(flg_EKF_converged || ((rematch_num==0) && (iterCount==num_max_iter-2)))
-      {       
+      {
         rematch_num++;
       }
 
@@ -1023,16 +1027,16 @@ public:
           bool check_flag = false;
           for(int i=0; i<NMATCH; i++)
           {
-            if(fabs(direct.dot(A.row(i)) + 1.0) > 0.1) 
+            if(fabs(direct.dot(A.row(i)) + 1.0) > 0.1)
               check_flag = true;
           }
 
-          if(check_flag) 
+          if(check_flag)
           {
             ds[i] = -1;
             continue;
           }
-          
+
           double d = 1.0 / direct.norm();
           // direct *= d;
           ds[i] = d;
@@ -1098,6 +1102,7 @@ public:
   }
 
   // After detecting loop closure, refine current map and states
+  // note:回环检测成功之后，对“局部地图 + 局部状态”更新
   void loop_update()
   {
     printf("loop update: %zu\n", sws[0].size());
@@ -1117,7 +1122,7 @@ public:
     int blsize = scanPoses->size();
     PointType ap = pcl_path[0];
     pcl_path.clear();
-    
+
     for(int i=0; i<blsize; i++)
     {
       ap.x = scanPoses->at(i)->x.p[0];
@@ -1134,7 +1139,7 @@ public:
       ap.z = bl->x.p[2];
       pcl_path.push_back(ap);
     }
-    
+
     for(int i=0; i<win_count; i++)
     {
       IMUST &x = x_buf[i];
@@ -1154,7 +1159,7 @@ public:
     x_curr.p = x_buf[win_count-1].p;
     x_curr.v = dx.R * x_curr.v;
     x_curr.g = x_buf[win_count-1].g;
-    
+
     for(int i=0; i<win_size; i++)
       mp[i] = i;
 
@@ -1166,7 +1171,7 @@ public:
         pv.pnt = xx.R * pv.pnt + xx.p;
       cut_voxel(surf_map, pvec_tem, win_size, 0);
     }
-    
+
     PLV(3) pwld;
     for(int i=0; i<win_count; i++)
     {
@@ -1224,7 +1229,7 @@ public:
         break;
       }
     }
-    
+
   }
 
   int initialization(deque<sensor_msgs::Imu::Ptr> &imus, Eigen::MatrixXd &hess, LidarFactor &voxhess, PLV(3) &pwld, pcl::PointCloud<PointType>::Ptr pcl_curr)
@@ -1234,6 +1239,7 @@ public:
     static vector<deque<sensor_msgs::Imu::Ptr>> vec_imus;
 
     pcl::PointCloud<PointType>::Ptr orig(new pcl::PointCloud<PointType>(*pcl_curr));
+    // IMU预测、运动补偿
     if(odom_ekf.process(x_curr, *pcl_curr, imus) == 0)
       return 0;
 
@@ -1242,11 +1248,15 @@ public:
 
     PVecPtr pptr(new PVec);
     double downkd = down_size >= 0.5 ? down_size : 0.5;
+    // 点云降采样
     down_sampling_voxel(*pcl_curr, downkd);
+    // 协方差计算及点云变换到IMU坐标系
     var_init(extrin_para, *pcl_curr, pptr, dept_err, beam_err);
+    // 用于初始化的lidar观测更新部分
     lio_state_estimation_kdtree(pptr);
 
     pwld.clear();
+    // 点云转化到世界坐标系下，点云协方差传播
     pvec_update(pptr, x_curr, pwld);
 
     win_count++;
@@ -1276,6 +1286,7 @@ public:
     vec_imus.push_back(imus);
 
     int is_success = 0;
+    // note:使用了win_size(10)帧 LiDAR 点云数据以及对应IMU，作为一个时间窗口来完成初始化（差不多就是一秒数据）
     if(win_count >= win_size)
     {
       is_success = Initialization::instance().motion_init(pl_origs, vec_imus, beg_times, &hess, voxhess, x_buf, surf_map, surf_map_slide, pvec_buf, win_size, sws, x_curr, imu_pre_buf, extrin_para);
@@ -1336,7 +1347,7 @@ public:
 
     int thd_num = thread_num;
     vector<vector<OctoTree*>*> octs;
-    for(int i=0; i<thd_num; i++) 
+    for(int i=0; i<thd_num; i++)
       octs.push_back(new vector<OctoTree*>());
 
     int g_size = feat_map.size();
@@ -1364,7 +1375,7 @@ public:
     {
       mthreads[i] = new thread(margi_func, win_count, octs[i], xs, ref(voxopt));
     }
-    
+
     for(int i=0; i<thd_num; i++)
     {
       if(i == 0)
@@ -1395,6 +1406,10 @@ public:
   }
 
   // Determine the plane and recut the voxel map in octo-tree
+  // 对 feat_map 中的所有体素 OctoTree 进行平面重新计算（recut）。
+  // 更新每个体素内部的点到滑动窗口 sws。
+  // 将体素数据传递给 Lidar 优化器 voxopt。
+  // 多线程处理加速大规模体素计算。
   void multi_recut(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, int win_count, vector<IMUST> &xs, LidarFactor &voxopt, vector<vector<SlideWindow*>> &sws)
   {
     // for(auto iter=feat_map.begin(); iter!=feat_map.end(); iter++)
@@ -1453,11 +1468,12 @@ public:
   }
 
   // The main thread of odometry and local mapping
+  // note:里程计+局部建图模块
   void thd_odometry_localmapping(ros::NodeHandle &n)
   {
-    PLV(3) pwld;
+    PLV(3) pwld;                            // 当前帧在世界系下的点云（用于可视化/发布）
     double down_sizes[3] = {0.1, 0.2, 0.4};
-    Eigen::Vector3d last_pos(0, 0 ,0);
+    Eigen::Vector3d last_pos(0, 0 ,0);      // 上一次累计里程的位置
     double jour = 0;
     int counter = 0;
 
@@ -1467,19 +1483,22 @@ public:
     vector<pcl::PointCloud<PointType>::Ptr> pl_origs;
     vector<double> beg_times;
     vector<deque<sensor_msgs::Imu::Ptr>> vec_imus;
-    bool release_flag = false;
-    int degrade_cnt = 0;
-    LidarFactor voxhess(win_size);
-    const int mgsize = 1;
+    bool release_flag = false;                // 是否允许释放历史 voxel
+    int degrade_cnt = 0;                      // 退化计数器
+    LidarFactor voxhess(win_size);            // ?:Lidar BA优化因子
+    const int mgsize = 1;                     // 每次边缘化 1 帧
     Eigen::MatrixXd hess;
+    // note:主循环
     while(n.ok())
     {
       ros::spinOnce();
+      // step: 回环触发后局部地图更新
       if(loop_detect == 1)
       {
         loop_update(); last_pos = x_curr.p; jour = 0;
       }
-      
+
+      // 退出条件
       n.param<bool>("finish", is_finish, false);
       if(is_finish)
       {
@@ -1487,6 +1506,7 @@ public:
       }
 
       deque<sensor_msgs::Imu::Ptr> imus;
+      // step:lidar和IMU数据同步
       if(!sync_packages(pcl_curr, imus, odom_ekf))
       {
         if(octos_release.size() != 0)
@@ -1538,7 +1558,7 @@ public:
         sleep(0.001);
         continue;
       }
-
+      //note:首次进入时发布空地图
       static int first_flag = 1;
       if (first_flag)
       {
@@ -1551,6 +1571,7 @@ public:
       double t0 = ros::Time::now().toSec();
       double t1=0, t2=0, t3=0, t4=0, t5=0, t6=0, t7=0, t8=0;
 
+      // step:初始化
       if(motion_init_flag)
       {
         int init = initialization(imus, hess, voxhess, pwld, pcl_curr);
@@ -1566,11 +1587,13 @@ public:
           continue;
         }
       }
+      // step:里程计模块
       else
       {
+        // EKF预测、点云运动补偿
         if(odom_ekf.process(x_curr, *pcl_curr, imus) == 0)
           continue;
-
+        // 点云降采样
         pcl::PointCloud<PointType> pl_down = *pcl_curr;
         down_sampling_voxel(pl_down, down_size);
 
@@ -1581,8 +1604,10 @@ public:
         }
 
         PVecPtr pptr(new PVec);
+        // 计算每个点的协方差，点云转到世界坐标系下
         var_init(extrin_para, pl_down, pptr, dept_err, beam_err);
 
+        // 基于点到平面残差的 LiDAR–IMU 紧耦合里程计更新函数，包含退化检测判定
         if(lio_state_estimation(pptr))
         {
           if(degrade_cnt > 0) degrade_cnt--;
@@ -1590,31 +1615,39 @@ public:
         else
           degrade_cnt++;
 
+        // 更新世界系点云及协方差、轨迹
         pwld.clear();
         pvec_update(pptr, x_curr, pwld);
         ResultOutput::instance().pub_localtraj(pwld, jour, x_curr, sessionNames.size()-1, pcl_path);
 
         t1 = ros::Time::now().toSec();
 
+        // note:当前帧进入窗口帧
         win_count++;
         x_buf.push_back(x_curr);
         pvec_buf.push_back(pptr);
+        // IMU预积分帧间约束构建
         if(win_count > 1)
         {
           imu_pre_buf.push_back(new IMU_PRE(x_buf[win_count-2].bg, x_buf[win_count-2].ba));
           imu_pre_buf[win_count-2]->push_imu(imus);
         }
-        
+
+        // 根据欧式距离加载一帧历史关键帧，并没有时间上的考量
         keyframe_loading(jour);
+        // 初始化LidarBA优化因子
         voxhess.clear(); voxhess.win_size = win_size;
 
         // cut_voxel(surf_map, pvec_buf[win_count-1], win_count-1, surf_map_slide, win_size, pwld, sws[0]);
+        // 多线程实现：将当前帧点云 pvec 中的每个点按照其世界坐标划分到对应体素
         cut_voxel_multi(surf_map, pvec_buf[win_count-1], win_count-1, surf_map_slide, win_size, pwld, sws);
         t2 = ros::Time::now().toSec();
 
+        // 重新计算滑窗内所有帧对体素平面的约束，并累积 Hessian
         multi_recut(surf_map_slide, win_count, x_buf, voxhess, sws);
         t3 = ros::Time::now().toSec();
 
+        // 退化检测与系统重置
         if(degrade_cnt > degrade_bound)
         {
           degrade_cnt = 0;
@@ -1634,10 +1667,11 @@ public:
         }
       }
 
+      // 窗口已满，可以做联合优化
       if(win_count >= win_size)
       {
         t4 = ros::Time::now().toSec();
-        
+        // 优化重力的BA
         if(g_update == 2)
         {
           LI_BA_OptimizerGravity opt_lsv;
@@ -1647,12 +1681,14 @@ public:
           g_update = 0;
           x_curr.g = x_buf[win_count-1].g;
         }
+        // 标准 LIO 滑窗 BA
         else
         {
           LI_BA_Optimizer opt_lsv;
           opt_lsv.damping_iter(x_buf, voxhess, imu_pre_buf, &hess);
         }
 
+        // 把最老帧送入回环线程
         ScanPose *bl = new ScanPose(x_buf[0], pvec_buf[0]);
         bl->v6 = hess.block<6, 6>(0, DIM).diagonal();
         for(int i=0; i<6; i++) bl->v6[i] = 1.0 / fabs(bl->v6[i]);
@@ -1664,11 +1700,13 @@ public:
         x_curr.p = x_buf[win_count-1].p;
         t5 = ros::Time::now().toSec();
 
+        // 发布局部地图
         ResultOutput::instance().pub_localmap(mgsize, sessionNames.size()-1, pvec_buf, x_buf, pcl_path, win_base, win_count);
 
+        // 滑动窗口边缘化
         multi_margi(surf_map_slide, jour, win_count, x_buf, voxhess, sws[0]);
         t6 = ros::Time::now().toSec();
-
+        // 定期更新里程计里程 jour，用于跟踪累计移动距离，每处理 10 帧点云时触发一次检查
         if((win_base + win_count) % 10 == 0)
         {
           double spat = (x_curr.p - last_pos).norm();
@@ -1680,18 +1718,21 @@ public:
           }
         }
 
+        // 保存当前滑动窗口的点云
         if(is_save_map)
         {
           for(int i=0; i<mgsize; i++)
             FileReaderWriter::instance().save_pcd(pvec_buf[i], x_buf[i], win_base + i, savepath + bagname);
         }
 
+        // 更新滑动窗口索引映射
         for(int i=0; i<win_size; i++)
         {
           mp[i] += mgsize;
           if(mp[i] >= win_size) mp[i] -= win_size;
         }
 
+        // 滑动窗口左移（丢弃旧帧）
         for(int i=mgsize; i<win_count; i++)
         {
           x_buf[i-mgsize] = x_buf[i];
@@ -1700,6 +1741,7 @@ public:
           pvec_buf[i] = pvec_tem;
         }
 
+        // 弹出并释放多余旧帧
         for(int i=win_count-mgsize; i<win_count; i++)
         {
           x_buf.pop_back();
@@ -1708,10 +1750,10 @@ public:
           delete imu_pre_buf.front();
           imu_pre_buf.pop_front();
         }
-
+        // 更新滑动窗口计数和基序
         win_base += mgsize; win_count -= mgsize;
       }
-      
+
       double t_end = ros::Time::now().toSec();
       double mem = get_memory();
       // printf("%d: %.4lf: %.4lf %.4lf %.4lf %.4lf %.4lf %.2lfGb %.1lf\n", win_base+win_count, t_end-t0, t1-t0, t2-t1, t3-t2, t5-t4, t6-t5, mem, jour);
@@ -1719,6 +1761,7 @@ public:
       // printf("%d: %lf %lf %lf\n", win_base + win_count, x_curr.p[0], x_curr.p[1], x_curr.p[2]);
     }
 
+    // 程序结束，资源释放
     vector<OctoTree *> octos;
     for(auto iter=surf_map.begin(); iter!=surf_map.end(); iter++)
     {
@@ -1747,7 +1790,7 @@ public:
     stepsizes.clear(); stepsizes.push_back(0);
     for(int i=0; i<ids.size(); i++)
       stepsizes.push_back(stepsizes.back() + multimap_scanPoses[ids[i]]->size());
-    
+
     for(int ii=0; ii<ids.size(); ii++)
     {
       int bsize = stepsizes[ii], id = ids[ii];
@@ -1798,11 +1841,12 @@ public:
         }
       }
     }
-    
+
   }
 
   // The main thread of loop clousre
   // The topDownProcess of HBA is also run here
+  // note:回环检测线程(关键帧是在这里进行管理的)
   void thd_loop_closure(ros::NodeHandle &n)
   {
     pl_kdmap.reset(new pcl::PointCloud<PointType>);
@@ -1813,20 +1857,21 @@ public:
     double ratio_drift = 0.05;
     int curr_halt = 10, prev_halt = 30;
     int isHighFly = 0;
-    n.param<double>("Loop/jud_default", jud_default, 0.45);
-    n.param<double>("Loop/icp_eigval", icp_eigval, 14);
-    n.param<double>("Loop/ratio_drift", ratio_drift, 0.05);
+    n.param<double>("Loop/jud_default", jud_default, 0.45);    //STDesc 匹配置信度阈值
+    n.param<double>("Loop/icp_eigval", icp_eigval, 14);        // ICP 法向退化判断阈值
+    n.param<double>("Loop/ratio_drift", ratio_drift, 0.05);    // 漂移 / 距离 比例阈值
     n.param<int>("Loop/curr_halt", curr_halt, 10);
     n.param<int>("Loop/prev_halt", prev_halt, 30);
     n.param<int>("Loop/isHighFly", isHighFly, 0);
     ConfigSetting config_setting;
     read_parameters(n, config_setting, isHighFly);
 
+    // 支持multi-session SLAM loop
     vector<double> juds;
     FileReaderWriter::instance().previous_map_names(n, sessionNames, juds);
     FileReaderWriter::instance().pgo_edges_io(lp_edges, sessionNames, 0, savepath, bagname);
     FileReaderWriter::instance().previous_map_read(std_managers, multimap_scanPoses, multimap_keyframes, config_setting, lp_edges, n, sessionNames, juds, savepath, win_size);
-    
+
     STDescManager *std_manager = new STDescManager(config_setting);
     sessionNames.push_back(bagname);
     std_managers.push_back(std_manager);
@@ -1836,7 +1881,7 @@ public:
     vector<double> jours(std_managers.size(), 0);
 
     vector<int> relc_counts(std_managers.size(), prev_halt);
-    
+
     deque<ScanPose*> bl_local;
     Eigen::Matrix<double, 6, 1> v6_init, v6_fixd;
     v6_init << 1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 1e-4;
@@ -1865,7 +1910,7 @@ public:
         scanPoses = new vector<ScanPose*>();
         multimap_scanPoses.push_back(scanPoses);
 
-        bl_local.clear(); buf_base = 0; 
+        bl_local.clear(); buf_base = 0;
         std_manager->config_setting_.skip_near_num_ = -(std_manager->plane_cloud_vec_.size()+10);
         std_manager = new STDescManager(config_setting);
         std_managers.push_back(std_manager);
@@ -1882,7 +1927,7 @@ public:
         ResultOutput::instance().pub_globalmap(multimap_keyframes, ids, pub_pmap);
 
         initial.clear(); graph = gtsam::NonlinearFactorGraph();
-        ids.clear(); ids.push_back(std_managers.size()-1); 
+        ids.clear(); ids.push_back(std_managers.size()-1);
         stepsizes.clear(); stepsizes.push_back(0); stepsizes.push_back(0);
       }
 
@@ -1897,7 +1942,7 @@ public:
       }
       ScanPose *bl_head = nullptr;
       mtx_loop.lock();
-      if(!buf_lba2loop.empty()) 
+      if(!buf_lba2loop.empty())
       {
         bl_head = buf_lba2loop.front();
         buf_lba2loop.pop_front();
@@ -2025,9 +2070,9 @@ public:
             else
             {
               for(int i=0; i<ids.size(); i++)
-                if(id == ids[i]) 
+                if(id == ids[i])
                   step = i;
-              
+
               printf("drift: %lf %lf\n", drift_p, jours[id]);
 
               if(step == -1)
@@ -2075,11 +2120,11 @@ public:
 
           }
         }
-        
+
       }
       for(int &it: relc_counts) it++;
       std_manager->AddSTDescs(stds_vec);
-  
+
       if(isGraph)
       {
         build_graph(initial, graph, cur_id, lp_edges, odom_noise, ids, stepsizes, 1);
@@ -2096,7 +2141,7 @@ public:
         for(int i=0; i<5; i++) isam.update();
         gtsam::Values results = isam.calculateEstimate();
         int resultsize = results.size();
-        
+
         IMUST x1 = scanPoses->at(buf_base-1)->x;
         int idsize = ids.size();
 
@@ -2122,7 +2167,7 @@ public:
         initial.clear();
         for(int i=0; i<resultsize; i++)
           initial.insert(i, results.at(i).cast<gtsam::Pose3>());
-        
+
         IMUST x3 = scanPoses->at(buf_base-1)->x;
         dx.p = x3.p - x3.R * x1.R.transpose() * x1.p;
         dx.R = x3.R * x1.R.transpose();
@@ -2194,7 +2239,7 @@ public:
         relc_counts.pop_back();
       }
 
-      if(multimap_keyframes.empty()) 
+      if(multimap_keyframes.empty())
       {
         printf("no data\n"); return;
       }
@@ -2223,9 +2268,10 @@ public:
       for(int j=0; j<multimap_keyframes[i]->size(); j++)
         delete multimap_keyframes[i]->at(j);
     }
-    
+
     malloc_trim(0);
   }
+  // end of loop thread
 
   // The top down process of HBA
   void topDownProcess(gtsam::Values &initial, gtsam::NonlinearFactorGraph &graph, vector<int> &ids, vector<int> &stepsizes)
@@ -2243,7 +2289,7 @@ public:
 
     double t0 = ros::Time::now().toSec();
     while(gba_flag);
-    
+
     for(PGO_Edge &edge: gba_edges1.edges)
     {
       vector<int> step(2);
@@ -2346,7 +2392,7 @@ public:
         xs.push_back(p_xs[i]);
       }
     }
-    
+
     int wdsize = smps.size();
     Eigen::MatrixXd hess;
     vector<double> gba_eigen_value_array_orig = gba_eigen_value_array;
@@ -2443,7 +2489,7 @@ public:
           pl.push_back(ap);
         }
       }
-      
+
       down_sampling_voxel(pl, voxel_size / 8);
       plptr->clear(); plptr->reserve(pl.size());
       for(PointType &ap: pl.points)
@@ -2589,7 +2635,7 @@ public:
         for(int i=0; i<mgsize; i++)
           localID.pop_front();
       }
-  
+
     }
 
   }
@@ -2608,12 +2654,12 @@ int main(int argc, char **argv)
   pub_test = n.advertise<sensor_msgs::PointCloud2>("/map_test", 100);
   pub_curr_path = n.advertise<sensor_msgs::PointCloud2>("/map_path", 100);
   pub_prev_path = n.advertise<sensor_msgs::PointCloud2>("/map_true", 100);
-  
+
   VOXEL_SLAM vs(n);
   mp = new int[vs.win_size];
   for(int i=0; i<vs.win_size; i++)
     mp[i] = i;
-  
+
   thread thread_loop(&VOXEL_SLAM::thd_loop_closure, &vs, ref(n));
   thread thread_gba(&VOXEL_SLAM::thd_globalmapping, &vs, ref(n));
   vs.thd_odometry_localmapping(n);

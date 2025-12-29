@@ -81,8 +81,8 @@ void pcl_handler(T &msg)
 
   if(pl_ptr->empty())
   {
-    PointType ap; 
-    ap.x = 0; ap.y = 0; ap.z = 0; 
+    PointType ap;
+    ap.x = 0; ap.y = 0; ap.z = 0;
     ap.intensity = 0; ap.curvature = 0;
     pl_ptr->push_back(ap);
     ap.curvature = 0.09;
@@ -138,7 +138,7 @@ bool sync_packages(pcl::PointCloud<PointType>::Ptr &pl_ptr, deque<sensor_msgs::I
 
   mBuf.lock();
   double imu_time = imu_buf.front()->header.stamp.toSec();
-  while((!imu_buf.empty()) && (imu_time < p_imu.pcl_end_time)) 
+  while((!imu_buf.empty()) && (imu_time < p_imu.pcl_end_time))
   {
     imu_time = imu_buf.front()->header.stamp.toSec();
     if(imu_time > p_imu.pcl_end_time) break;
@@ -161,7 +161,7 @@ bool sync_packages(pcl::PointCloud<PointType>::Ptr &pl_ptr, deque<sensor_msgs::I
 }
 
 double dept_err, beam_err;
-void calcBodyVar(Eigen::Vector3d &pb, const float range_inc, const float degree_inc, Eigen::Matrix3d &var) 
+void calcBodyVar(Eigen::Vector3d &pb, const float range_inc, const float degree_inc, Eigen::Matrix3d &var)
 {
   if (pb[2] == 0)
     pb[2] = 0.0001;
@@ -194,12 +194,14 @@ void var_init(IMUST &ext, pcl::PointCloud<PointType> &pl_cur, PVecPtr pptr, doub
     PointType &ap = pl_cur[i];
     pointVar &pv = pptr->at(i);
     pv.pnt << ap.x, ap.y, ap.z;
+    // 计算雷达系测量协方差
     calcBodyVar(pv.pnt, dept_err, beam_err, pv.var);
     pv.pnt = ext.R * pv.pnt + ext.p;
     pv.var = ext.R * pv.var * ext.R.transpose();
   }
 }
 
+// 在考虑当前 IMU 位姿协方差，将IMU坐标系下的点云变换到世界坐标系，并对每个点的协方差进行严格的一阶误差传播。
 void pvec_update(PVecPtr pptr, IMUST &x_curr, PLV(3) &pwld)
 {
   Eigen::Matrix3d rot_var = x_curr.cov.block<3, 3>(0, 0);
@@ -231,7 +233,7 @@ void read_lidarstate(string filename, vector<ScanPose*> &bl_tem)
     stringstream ss(lineStr);
     while(getline(ss, str, ' '))
       nums.push_back(stod(str));
-    
+
     IMUST xx;
     xx.t = nums[0];
     xx.p << nums[1], nums[2], nums[3];
@@ -249,7 +251,7 @@ void read_lidarstate(string filename, vector<ScanPose*> &bl_tem)
     bl_tem.push_back(blp);
 
     if(nums.size() >= 26)
-      for(int i=0; i<6; i++) 
+      for(int i=0; i<6; i++)
         blp->v6[i] = nums[i + 20];
   }
 }
