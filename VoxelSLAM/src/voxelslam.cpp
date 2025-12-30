@@ -562,13 +562,15 @@ public:
 
   int motion_init(vector<pcl::PointCloud<PointType>::Ptr> &pl_origs, vector<deque<sensor_msgs::Imu::Ptr>> &vec_imus, vector<double> &beg_times, Eigen::MatrixXd *hess, LidarFactor &voxhess, vector<IMUST> &x_buf, unordered_map<VOXEL_LOC, OctoTree*> &surf_map, unordered_map<VOXEL_LOC, OctoTree*> &surf_map_slide, vector<PVecPtr> &pvec_buf, int win_size, vector<vector<SlideWindow*>> &sws, IMUST &x_curr, deque<IMU_PRE*> &imu_pre_buf, IMUST &extrin_para)
   {
-    PLV(3) pwld;
-    double last_g_norm = x_buf[0].g.norm();
+    PLV(3) pwld;                             // 世界系点云
+    double last_g_norm = x_buf[0].g.norm();  // 初始重力模长
     int converge_flag = 0;
 
-    double min_eigen_value_orig = min_eigen_value;
-    vector<double> eigen_value_array_orig = plane_eigen_value_thre;
+    // 保存“正常建图阶段”的判定阈值
+    double min_eigen_value_orig = min_eigen_value;       // 0.0025
+    vector<double> eigen_value_array_orig = plane_eigen_value_thre;     // 0.25 0.25 0.25 0.25
 
+    // 初始化阶段 放宽平面约束条件
     min_eigen_value = 0.02;
     for(double &iter: plane_eigen_value_thre)
       iter = 1.0 / 4;
@@ -578,14 +580,17 @@ public:
     int converge_times = 0;
     bool is_degrade = true;
     Eigen::Vector3d eigvalue; eigvalue.setZero();
+    // 最多迭代10次
     for(int iterCnt = 0; iterCnt < 10; iterCnt++)
     {
+      // 若已经收敛，则收紧判定条件
       if(converge_flag == 1)
       {
         min_eigen_value = min_eigen_value_orig;
         plane_eigen_value_thre = eigen_value_array_orig;
       }
 
+      // 清空上一轮 voxel 地图
       vector<OctoTree*> octos;
       for(auto iter=surf_map.begin(); iter!=surf_map.end(); ++iter)
       {
@@ -597,29 +602,35 @@ public:
         delete octos[i];
       surf_map.clear(); octos.clear(); surf_map_slide.clear();
 
+      // 遍历滑窗，处理每一帧lidar点云
       for(int i=0; i<win_size; i++)
       {
+        // 点云去畸变
         pwld.clear();
         pvec_buf[i]->clear();
         int l = i==0 ? i : i - 1;
         motion_blur(*pl_origs[i], *pvec_buf[i], x_buf[i], x_buf[l], vec_imus[i], beg_times[i], extrin_para);
 
+        // 若已经收敛则考虑协方差传递
         if(converge_flag == 1)
         {
           for(pointVar &pv: *pvec_buf[i])
             calcBodyVar(pv.pnt, dept_err, beam_err, pv.var);
           pvec_update(pvec_buf[i], x_buf[i], pwld);
         }
+        // 反之只将点云转到世界系下
         else
         {
           for(pointVar &pv: *pvec_buf[i])
             pwld.push_back(x_buf[i].R * pv.pnt + x_buf[i].p);
         }
 
+        // 点云体素化并构建平面
         cut_voxel(surf_map, pvec_buf[i], i, surf_map_slide, win_size, pwld, sws[0]);
       }
 
       // LidarFactor voxhess(win_size);
+      // 构建Lidar优化因子
       voxhess.clear(); voxhess.win_size = win_size;
       for(auto iter=surf_map.begin(); iter!=surf_map.end(); ++iter)
       {
@@ -627,8 +638,11 @@ public:
         iter->second->tras_opt(voxhess);
       }
 
+      // 约束太少直接失败
       if(voxhess.plvec_voxels.size() < 10)
         break;
+
+      // note:LiDAR–IMU 联合优化
       LI_BA_OptimizerGravity opt_lsv;
       vector<double> resis;
       opt_lsv.damping_iter(x_buf, voxhess, imu_pre_buf, resis, hess, 3);
@@ -640,12 +654,15 @@ public:
         delete imu_pre_buf[i];
       imu_pre_buf.clear();
 
+      // 利用新的偏置重新进行IMU预积分
       for(int i=1; i<win_size; i++)
       {
         imu_pre_buf.push_back(new IMU_PRE(x_buf[i-1].bg, x_buf[i-1].ba));
         imu_pre_buf.back()->push_imu(vec_imus[i]);
       }
 
+      // 收敛判定 + 退化检测
+      // 初始化体素地图，需包含三个线性无关方向的平面约束，这里直接判定最小特征值是否有足够约束
       if(fabs(resis[0] - resis[1]) / resis[0] < converge_thre && iterCnt >= 2)
       {
         for(Eigen::Matrix3d &iter: voxhess.eig_vectors)
@@ -658,6 +675,7 @@ public:
         is_degrade = eigvalue[0] < 15 ? true : false;
 
         converge_thre = 0.01;
+        // 重力对齐
         if(converge_flag == 0)
         {
           align_gravity(x_buf);
@@ -669,12 +687,14 @@ public:
       }
     }
 
+    // 重力合法性检验
     x_curr = x_buf[win_size - 1];
     double gnm = x_curr.g.norm();
     if(is_degrade || gnm < 9.6 || gnm > 10.0)
     {
       converge_flag = 0;
     }
+    // 初始化失败则清空地图
     if(converge_flag == 0)
     {
       vector<OctoTree*> octos;
@@ -699,14 +719,18 @@ public:
     printf("init time: %lf\n", t1 - t0);
 
     // align_gravity(x_buf);
+    // 初始化地图可视化
     pcl::PointCloud<PointType> pcl_send; PointType pt;
     for(int i=0; i<win_size; i++)
-    for(pointVar &pv: *pvec_buf[i])
     {
-      Eigen::Vector3d vv = x_buf[i].R * pv.pnt + x_buf[i].p;
-      pt.x = vv[0]; pt.y = vv[1]; pt.z = vv[2];
-      pcl_send.push_back(pt);
+      for(pointVar &pv: *pvec_buf[i])
+      {
+        Eigen::Vector3d vv = x_buf[i].R * pv.pnt + x_buf[i].p;
+        pt.x = vv[0]; pt.y = vv[1]; pt.z = vv[2];
+        pcl_send.push_back(pt);
+      }
     }
+
     pub_pl_func(pcl_send, pub_init);
 
     return converge_flag;
@@ -1248,7 +1272,7 @@ public:
 
     PVecPtr pptr(new PVec);
     double downkd = down_size >= 0.5 ? down_size : 0.5;
-    // 点云降采样
+    // ?:点云降采样,这里采用的是体素均值降采样，不是原始点合理吗
     down_sampling_voxel(*pcl_curr, downkd);
     // 协方差计算及点云变换到IMU坐标系
     var_init(extrin_para, *pcl_curr, pptr, dept_err, beam_err);
@@ -1259,17 +1283,20 @@ public:
     // 点云转化到世界坐标系下，点云协方差传播
     pvec_update(pptr, x_curr, pwld);
 
+    // 滑窗扫描帧计数
     win_count++;
     x_buf.push_back(x_curr);
     pvec_buf.push_back(pptr);
     ResultOutput::instance().pub_localtraj(pwld, 0, x_curr, sessionNames.size()-1, pcl_path);
 
+    // IMU预积分
     if(win_count > 1)
     {
       imu_pre_buf.push_back(new IMU_PRE(x_buf[win_count-2].bg, x_buf[win_count-2].ba));
       imu_pre_buf[win_count-2]->push_imu(imus);
     }
 
+    // 点云降采样(最接近体素质心)
     pcl::PointCloud<PointType> pl_mid = *orig;
     down_sampling_close(*orig, down_size);
     if(orig->size() < 1000)
@@ -1289,6 +1316,7 @@ public:
     // note:使用了win_size(10)帧 LiDAR 点云数据以及对应IMU，作为一个时间窗口来完成初始化（差不多就是一秒数据）
     if(win_count >= win_size)
     {
+      // 初始化核心函数
       is_success = Initialization::instance().motion_init(pl_origs, vec_imus, beg_times, &hess, voxhess, x_buf, surf_map, surf_map_slide, pvec_buf, win_size, sws, x_curr, imu_pre_buf, extrin_para);
 
       if(is_success == 0)
@@ -2647,12 +2675,12 @@ int main(int argc, char **argv)
   ros::init(argc, argv, "cmn_voxel");
   ros::NodeHandle n;
 
-  pub_cmap = n.advertise<sensor_msgs::PointCloud2>("/map_cmap", 100);
-  pub_pmap = n.advertise<sensor_msgs::PointCloud2>("/map_pmap", 100);
-  pub_scan = n.advertise<sensor_msgs::PointCloud2>("/map_scan", 100);
-  pub_init = n.advertise<sensor_msgs::PointCloud2>("/map_init", 100);
-  pub_test = n.advertise<sensor_msgs::PointCloud2>("/map_test", 100);
-  pub_curr_path = n.advertise<sensor_msgs::PointCloud2>("/map_path", 100);
+  pub_cmap = n.advertise<sensor_msgs::PointCloud2>("/map_cmap", 100);         //滑动窗口的局部地图
+  pub_pmap = n.advertise<sensor_msgs::PointCloud2>("/map_pmap", 100);         //和全局建图相关
+  pub_scan = n.advertise<sensor_msgs::PointCloud2>("/map_scan", 100);         //里程计扫描帧发布（初始化也会发布）
+  pub_init = n.advertise<sensor_msgs::PointCloud2>("/map_init", 100);         //初始化地图
+  pub_test = n.advertise<sensor_msgs::PointCloud2>("/map_test", 100);         //no use
+  pub_curr_path = n.advertise<sensor_msgs::PointCloud2>("/map_path", 100);    //里程计轨迹
   pub_prev_path = n.advertise<sensor_msgs::PointCloud2>("/map_true", 100);
 
   VOXEL_SLAM vs(n);

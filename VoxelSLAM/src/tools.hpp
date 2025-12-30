@@ -60,9 +60,9 @@ Eigen::Matrix3d Exp(const Eigen::Vector3d &ang)
     /// Roderigous Tranformation
     return I33 + std::sin(ang_norm) * K + (1.0 - std::cos(ang_norm)) * K * K;
   }
-  
+
   return I33;
-  
+
 }
 
 Eigen::Matrix3d Exp(const Eigen::Vector3d &ang_vel, const double &dt)
@@ -79,7 +79,7 @@ Eigen::Matrix3d Exp(const Eigen::Vector3d &ang_vel, const double &dt)
     /// Roderigous Tranformation
     return I33 + std::sin(r_ang) * K + (1.0 - std::cos(r_ang)) * K * K;
   }
-  
+
   return I33;
 }
 
@@ -143,7 +143,7 @@ struct IMUST
   Eigen::Vector3d ba;
   Eigen::Vector3d g;
   Eigen::Matrix<double, DIM, DIM> cov;
-  
+
   IMUST()
   {
     setZero();
@@ -161,7 +161,7 @@ struct IMUST
     return *this;
   }
 
-  Eigen::Matrix<double, DIM, 1> operator-(const IMUST &b) 
+  Eigen::Matrix<double, DIM, 1> operator-(const IMUST &b)
   {
     Eigen::Matrix<double, DIM, 1> a;
     a.block<3, 1>(0, 0) = Log(b.R.transpose() * this->R);
@@ -191,7 +191,7 @@ struct IMUST
     p.setZero(); v.setZero();
     bg.setZero(); ba.setZero();
     // g << 0, 0, -G_m_s2;
-    cov.setIdentity(); 
+    cov.setIdentity();
     cov *= 0.0001;
     cov.block<6, 6>(9, 9) = Eigen::Matrix<double, 6, 6>::Identity() * 0.00001;
   }
@@ -218,11 +218,13 @@ void down_sampling_voxel(pcl::PointCloud<PointType> &pl_feat, double voxel_size)
     if(iter == feat_map.end())
     {
       PointType pp = p_c;
+      // 这里用作计数器
       pp.curvature = 1;
       feat_map[position] = pp;
     }
     else
     {
+      // 在线地推均值
       PointType &pp = iter->second;
       pp.x = (pp.x * pp.curvature + p_c.x) / (pp.curvature + 1);
       pp.y = (pp.y * pp.curvature + p_c.y) / (pp.curvature + 1);
@@ -232,11 +234,13 @@ void down_sampling_voxel(pcl::PointCloud<PointType> &pl_feat, double voxel_size)
   }
 
   pl_feat.clear();
+  // 每个体素只保留一个“均值点”
   for(auto iter=feat_map.begin(); iter!=feat_map.end(); ++iter)
     pl_feat.push_back(iter->second);
-  
+
 }
 
+// 质心最近邻采样
 void down_sampling_close(pcl::PointCloud<PointType> &pl_feat, double voxel_size)
 {
   if(voxel_size < 0.001) return;
@@ -253,6 +257,7 @@ void down_sampling_close(pcl::PointCloud<PointType> &pl_feat, double voxel_size)
     }
 
     VOXEL_LOC position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);
+    // 查找该体素是否已存在
     auto iter = feat_map.find(position);
     if(iter == feat_map.end())
     {
