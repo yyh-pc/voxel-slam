@@ -5,12 +5,13 @@ General:
   previous_map: ""
   bagname: "mid360_init"
   lidar_type: 0
-  blind: 0.5 # 0.5
+  blind: 0.5
   point_filter_num: 3
   extrinsic_tran: [-0.011, -0.02329, 0.04412]
   extrinsic_rota: [1, 0, 0,
                    0, 1, 0,
                    0, 0, 1]
+  # 是否保存地图，开启的话会创建/save_path/bagname
   is_save_map: 0
 
 Odometry:

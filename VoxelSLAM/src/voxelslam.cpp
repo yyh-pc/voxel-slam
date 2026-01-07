@@ -275,6 +275,7 @@ public:
   }
 
   // loading the offline map
+  // note:加载历史地图
   void previous_map_names(ros::NodeHandle &n, vector<string> &fnames, vector<double> &juds)
   {
     string premap;
@@ -741,47 +742,47 @@ public:
 class VOXEL_SLAM
 {
 public:
-  pcl::PointCloud<PointType> pcl_path;
-  IMUST x_curr, extrin_para;
-  IMUEKF odom_ekf;
-  unordered_map<VOXEL_LOC, OctoTree*> surf_map, surf_map_slide;
-  double down_size;
+  pcl::PointCloud<PointType> pcl_path;   //本框架是用点云可视化的path
+  IMUST x_curr, extrin_para;             //当前帧状态、lidar到IMU的外参
+  IMUEKF odom_ekf;                       //IMU–LiDAR 紧耦合里程计 EKF,负责前端状态预测与更新
+  unordered_map<VOXEL_LOC, OctoTree*> surf_map, surf_map_slide;     //?:主体素地图：当前滑窗内&历史保留的体素，滑动窗口专用体素地图，用于localBA
+  double down_size;                      //点云下采样体素尺寸（odometry 阶段）
 
-  int win_size;
-  vector<IMUST> x_buf;
-  vector<PVecPtr> pvec_buf;
-  deque<IMU_PRE*> imu_pre_buf;
-  int win_count = 0, win_base = 0;
-  vector<vector<SlideWindow*>> sws;
+  int win_size;                          //局部BA的滑动窗口大小
+  vector<IMUST> x_buf;                   //滑动窗口内每一帧的系统状态
+  vector<PVecPtr> pvec_buf;              //滑动窗口内每一帧的点云
+  deque<IMU_PRE*> imu_pre_buf;           //相邻扫描帧之间的 IMU 预积分因子（Local BA 用）
+  int win_count = 0, win_base = 0;       //当前窗口中已有的帧数/滑窗起始帧索引（边缘化时使用）
+  vector<vector<SlideWindow*>> sws;      //?:多线程体素滑窗结构（每个线程维护自己的 SlideWindow 列表）
 
-  vector<ScanPose*> *scanPoses;
+  vector<ScanPose*> *scanPoses;          //note:所有历史 scan 的位姿集合（回环检测 & 全局更新使用）
   mutex mtx_loop;
-  deque<ScanPose*> buf_lba2loop, buf_lba2loop_tem;
-  vector<Keyframe*> *keyframes;
-  int loop_detect = 0;
-  unordered_map<VOXEL_LOC, OctoTree*> map_loop;
-  IMUST dx;
-  pcl::PointCloud<PointType>::Ptr pl_kdmap;
-  pcl::KdTreeFLANN<PointType> kd_keyframes;
-  int history_kfsize = 0;
-  vector<OctoTree*> octos_release;
-  int reset_flag = 0;
-  int g_update = 0;
-  int thread_num = 5;
-  int degrade_bound = 10;
+  deque<ScanPose*> buf_lba2loop, buf_lba2loop_tem;   //LocalBA后等待回环处理的 ScanPose 队列 / 回环处理中使用的临时缓冲区
+  vector<Keyframe*> *keyframes;          //历史关键帧集合
+  int loop_detect = 0;                   //回环检测触发标志 / 状态量
+  unordered_map<VOXEL_LOC, OctoTree*> map_loop;      //回环优化后的体素地图（用于整体替换 surf_map）
+  IMUST dx;                                          //回环产生的全局位姿修正量（SE(3) 增量）
+  pcl::PointCloud<PointType>::Ptr pl_kdmap;          //历史关键帧位置点云（KD-tree 搜索用）
+  pcl::KdTreeFLANN<PointType> kd_keyframes;          //关键帧 KD-tree，用于加载邻近关键帧
+  int history_kfsize = 0;                            //?:当前尚未加载进体素地图的历史关键帧数量
+  vector<OctoTree*> octos_release;                   //延迟释放的 OctoTree 指针队列（降低频繁 delete 的开销）
+  int reset_flag = 0;                                //系统 reset 标志（退化或失败后触发）
+  int g_update = 0;                                  //重力更新状态标志（回环后或 BA 后触发）
+  int thread_num = 5;                                //多线程体素处理线程数
+  int degrade_bound = 10;                            //退化判断阈值
 
-  vector<vector<ScanPose*>*> multimap_scanPoses;
-  vector<vector<Keyframe*>*> multimap_keyframes;
-  volatile int gba_flag = 0;
-  int gba_size = 0;
-  vector<int> cnct_map;
+  vector<vector<ScanPose*>*> multimap_scanPoses;     //多 session 的 ScanPose 集合
+  vector<vector<Keyframe*>*> multimap_keyframes;     //多 session 的 关键帧 集合
+  volatile int gba_flag = 0;                         //全局BA触发
+  int gba_size = 0;                                  //当前参与全局 BA 的节点数量
+  vector<int> cnct_map;                              //?:session 之间的连接关系映射
   mutex mtx_keyframe;
-  PGO_Edges gba_edges1, gba_edges2;
-  bool is_finish = false;
+  PGO_Edges gba_edges1, gba_edges2;                  //全局 BA 的图优化边集合
+  bool is_finish = false;                            //系统结束标志（ROS param 控制）
 
-  vector<string> sessionNames;
-  string bagname, savepath;
-  int is_save_map;
+  vector<string> sessionNames;                       //?:多 session 名称列表（通常对应不同 bag）
+  string bagname, savepath;                          // 当前运行 bag 名称 & 地图保存路径
+  int is_save_map;                                   // 是否保存地图到磁盘（参数控制）
 
   VOXEL_SLAM(ros::NodeHandle &n)
   {
@@ -802,6 +803,7 @@ public:
     n.param<vector<double>>("General/extrinsic_rota", vecR, vector<double>());
     n.param<int>("General/is_save_map", is_save_map, 0);
 
+    // step:订阅lidar和IMU话题
     sub_imu = n.subscribe(imu_topic, 80000, imu_handler);
     if(feat.lidar_type == LIVOX)
       sub_pcl = n.subscribe<livox_ros_driver::CustomMsg>(lid_topic, 1000, pcl_handler);
@@ -872,6 +874,7 @@ public:
       exit(0);
     }
 
+    // note:初始化多线程体素滑窗容器
     sws.resize(thread_num);
     cout << "bagname: " << bagname << endl;
   }
@@ -1125,12 +1128,12 @@ public:
     double tt2 = ros::Time::now().toSec();
   }
 
-  // After detecting loop closure, refine current map and states
-  // note:回环检测成功之后，对“局部地图 + 局部状态”更新
+  // note:回环检测成功之后，对全系统位姿同步更新+重建自适应体素地图（位姿图中的5个最新关键帧+边缘化帧+滑动窗口帧）
   void loop_update()
   {
     printf("loop update: %zu\n", sws[0].size());
     double t1 = ros::Time::now().toSec();
+    //step:释放旧的 surf_map 中的 OctoTree
     for(auto iter=surf_map.begin(); iter!=surf_map.end(); iter++)
     {
       // octos_release.push_back(iter->second);
@@ -1138,15 +1141,20 @@ public:
       iter->second->clear_slwd(sws[0]);
       delete iter->second; iter->second = nullptr;
     }
+    //清空当前主地图与滑窗辅助地图
     surf_map.clear(); surf_map_slide.clear();
+    //step:用回环优化后的地图替换当前地图
     surf_map = map_loop;
     map_loop.clear();
 
     printf("scanPoses: %zu %zu %zu %d %d %zu\n", scanPoses->size(), buf_lba2loop.size(), x_buf.size(), win_base, win_count, sws[0].size());
+
+    //重建整条轨迹（历史所有帧）
     int blsize = scanPoses->size();
     PointType ap = pcl_path[0];
     pcl_path.clear();
 
+    //对应位姿图内的状态更新
     for(int i=0; i<blsize; i++)
     {
       ap.x = scanPoses->at(i)->x.p[0];
@@ -1155,6 +1163,7 @@ public:
       pcl_path.push_back(ap);
     }
 
+    //对应边缘化帧的状态更新(应用dx)
     for(ScanPose *bl: buf_lba2loop)
     {
       bl->update(dx);
@@ -1164,6 +1173,7 @@ public:
       pcl_path.push_back(ap);
     }
 
+    //对应滑动窗口内的状态更新（应用dx）
     for(int i=0; i<win_count; i++)
     {
       IMUST &x = x_buf[i];
@@ -1177,16 +1187,20 @@ public:
       pcl_path.push_back(ap);
     }
 
+    // 发布历史路径的所有点云（回环校正之后）
     pub_pl_func(pcl_path, pub_curr_path);
 
+    // 更新当前系统状态 x_curr（滑窗里的最新一帧）
     x_curr.R = x_buf[win_count-1].R;
     x_curr.p = x_buf[win_count-1].p;
     x_curr.v = dx.R * x_curr.v;
     x_curr.g = x_buf[win_count-1].g;
 
+    //?:初始化 mp 映射索引
     for(int i=0; i<win_size; i++)
       mp[i] = i;
 
+    //step:边缘化帧点云位姿更新后，重新更新体素到surf_map
     for(ScanPose *bl: buf_lba2loop)
     {
       IMUST xx = bl->x;
@@ -1196,6 +1210,7 @@ public:
       cut_voxel(surf_map, pvec_tem, win_size, 0);
     }
 
+    //step:滑动窗口内点云位姿更新并更新体素到surf_map
     PLV(3) pwld;
     for(int i=0; i<win_count; i++)
     {
@@ -1205,9 +1220,11 @@ public:
       cut_voxel(surf_map, pvec_buf[i], i, surf_map_slide, win_size, pwld, sws[0]);
     }
 
+    // step:对整个体素地图的八叉树进行平面重构和更新
     for(auto iter=surf_map.begin(); iter!=surf_map.end(); ++iter)
       iter->second->recut(win_count, x_buf, sws[0]);
 
+    //?:重力更新状态机
     if(g_update == 1) g_update = 2;
     loop_detect = 0;
     double t2 = ros::Time::now().toSec();
@@ -1256,6 +1273,7 @@ public:
 
   }
 
+  //note:系统初始化
   int initialization(deque<sensor_msgs::Imu::Ptr> &imus, Eigen::MatrixXd &hess, LidarFactor &voxhess, PLV(3) &pwld, pcl::PointCloud<PointType>::Ptr pcl_curr)
   {
     static vector<pcl::PointCloud<PointType>::Ptr> pl_origs;
@@ -1326,6 +1344,7 @@ public:
     return 0;
   }
 
+  //note:重置系统
   void system_reset(deque<sensor_msgs::Imu::Ptr> &imus)
   {
     for(auto iter=surf_map.begin(); iter!=surf_map.end(); iter++)
@@ -1357,6 +1376,7 @@ public:
 
   // After local BA, update the map and marginalize the points of oldest scan
   // multi means multiple thread
+  //note:滑窗边缘化
   void multi_margi(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, double jour, int win_count, vector<IMUST> &xs, LidarFactor &voxopt, vector<SlideWindow*> &sw)
   {
     // for(auto iter=feat_map.begin(); iter!=feat_map.end();)
@@ -1434,7 +1454,7 @@ public:
   }
 
   // Determine the plane and recut the voxel map in octo-tree
-  // 对 feat_map 中的所有体素 OctoTree 进行平面重新计算（recut）。
+  // note:对 feat_map 中的所有体素 OctoTree 进行平面重新计算（recut）。
   // 更新每个体素内部的点到滑动窗口 sws。
   // 将体素数据传递给 Lidar 优化器 voxopt。
   // 多线程处理加速大规模体素计算。
@@ -1716,11 +1736,12 @@ public:
           opt_lsv.damping_iter(x_buf, voxhess, imu_pre_buf, &hess);
         }
 
-        // 把最老帧送入回环线程
+        // note:把最老帧送入回环线程
         ScanPose *bl = new ScanPose(x_buf[0], pvec_buf[0]);
         bl->v6 = hess.block<6, 6>(0, DIM).diagonal();
         for(int i=0; i<6; i++) bl->v6[i] = 1.0 / fabs(bl->v6[i]);
         mtx_loop.lock();
+        // 这里是局部建图模块与回环模块的数据流交互
         buf_lba2loop.push_back(bl);
         mtx_loop.unlock();
 
@@ -1809,6 +1830,7 @@ public:
   }
 
   // Build the pose graph in loop closure
+  // note:重构位姿图
   void build_graph(gtsam::Values &initial, gtsam::NonlinearFactorGraph &graph, int cur_id, PGO_Edges &lp_edges, gtsam::noiseModel::Diagonal::shared_ptr default_noise, vector<int> &ids, vector<int> &stepsizes, int lpedge_enable)
   {
     initial.clear(); graph = gtsam::NonlinearFactorGraph();
@@ -1877,30 +1899,33 @@ public:
   // note:回环检测线程(关键帧是在这里进行管理的)
   void thd_loop_closure(ros::NodeHandle &n)
   {
-    pl_kdmap.reset(new pcl::PointCloud<PointType>);    //用于历史关键帧位姿的 KD-tree 搜索
+    pl_kdmap.reset(new pcl::PointCloud<PointType>);    //用于历史关键帧位姿的 KD-tree
     vector<STDescManager*> std_managers;               //每一个 session 对应一个 STDescManager
     PGO_Edges lp_edges;                                //回环边集合（用于 PGO / iSAM2）
 
+    // 回环判据
     double jud_default = 0.45, icp_eigval = 14;
     double ratio_drift = 0.05;
     int curr_halt = 10, prev_halt = 30;
     int isHighFly = 0;
-    n.param<double>("Loop/jud_default", jud_default, 0.45);    //STDesc 匹配置信度阈值
+    n.param<double>("Loop/jud_default", jud_default, 0.45);    // STDesc 匹配置信度阈值
     n.param<double>("Loop/icp_eigval", icp_eigval, 14);        // ICP 法向退化判断阈值
     n.param<double>("Loop/ratio_drift", ratio_drift, 0.05);    // 漂移 / 距离 比例阈值
-    n.param<int>("Loop/curr_halt", curr_halt, 10);
-    n.param<int>("Loop/prev_halt", prev_halt, 30);
-    n.param<int>("Loop/isHighFly", isHighFly, 0);
+    n.param<int>("Loop/curr_halt", curr_halt, 10);             // 当前 session 回环触发抑制
+    n.param<int>("Loop/prev_halt", prev_halt, 30);             // 历史 session 回环抑制
+    n.param<int>("Loop/isHighFly", isHighFly, 0);              // isHighFly 通常用于 UAV / 高速场景
     ConfigSetting config_setting;
     read_parameters(n, config_setting, isHighFly);
 
-    // 支持multi-session SLAM loop
+    // 支持multi-session SLAM loop,加载历史session的STDescManager、ScanPose、Keyframe、已有回环边
     vector<double> juds;
     FileReaderWriter::instance().previous_map_names(n, sessionNames, juds);
     FileReaderWriter::instance().pgo_edges_io(lp_edges, sessionNames, 0, savepath, bagname);
     FileReaderWriter::instance().previous_map_read(std_managers, multimap_scanPoses, multimap_keyframes, config_setting, lp_edges, n, sessionNames, juds, savepath, win_size);
 
+    // 当前session的描述子管理器
     STDescManager *std_manager = new STDescManager(config_setting);
+    // 把当前 session 纳入 统一多 session 管理体系
     sessionNames.push_back(bagname);
     std_managers.push_back(std_manager);
     multimap_scanPoses.push_back(scanPoses);
@@ -1910,7 +1935,10 @@ public:
 
     vector<int> relc_counts(std_managers.size(), prev_halt);
 
+    // 局部窗口 ScanPose 队列
     deque<ScanPose*> bl_local;
+
+    // note:iSAM2 初始化
     Eigen::Matrix<double, 6, 1> v6_init, v6_fixd;
     v6_init << 1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 1e-4;
     v6_fixd << 1e-6, 1e-6, 1e-6, 1e-6, 1e-6, 1e-6;
@@ -1919,101 +1947,144 @@ public:
     gtsam::Values initial;
     gtsam::NonlinearFactorGraph graph;
 
+    // ids:当前 PGO 中包含的 session id
+    // stepsizes:session i 在 graph 中的起始 index，stepsizes[0]维护的是历史session,stepsizes[1]维护的是当前活跃session
     vector<int> ids(1, std_managers.size() - 1), stepsizes(2, 0);
     pcl::PointCloud<pcl::PointXYZI>::Ptr plbtc(new pcl::PointCloud<pcl::PointXYZI>);
     IMUST x_key;
     int buf_base = 0;
 
+    // note:主循环
     while(n.ok())
     {
+      // step:重置标志位，只有重置时才会触发
       if(reset_flag == 1)
       {
         reset_flag = 0;
+        // 把 LocalBA 尚未处理完的 ScanPose 合并回主队列
         scanPoses->insert(scanPoses->end(), buf_lba2loop_tem.begin(), buf_lba2loop_tem.end());
+        // 释放点云引用，防止悬挂指针以及内存泄漏
         for(ScanPose *bl: buf_lba2loop_tem) bl->pvec = nullptr;
+        // 清空临时 buffer
         buf_lba2loop_tem.clear();
 
+        // 创建新的 Keyframe / ScanPose 容器（新 session）
         keyframes = new vector<Keyframe*>();
         multimap_keyframes.push_back(keyframes);
         scanPoses = new vector<ScanPose*>();
         multimap_scanPoses.push_back(scanPoses);
 
+        // 清空局部缓存,重置窗口状态
         bl_local.clear(); buf_base = 0;
+        // ?:STDesc 中用于 “跳过近邻帧匹配” 的参数,设置为负数,意味新 session 允许与旧 session 的所有历史帧做回环匹配
         std_manager->config_setting_.skip_near_num_ = -(std_manager->plane_cloud_vec_.size()+10);
+        // 创建新的 STDescManager（新 session）
         std_manager = new STDescManager(config_setting);
         std_managers.push_back(std_manager);
         relc_counts.push_back(prev_halt);
+        // 新 session 的命名与阈值初始化
         sessionNames.push_back(bagname + to_string(sessionNames.size()));
         juds.push_back(jud_default);
         jours.push_back(0);
 
+        // 更新当前 bag 名并创建存储目录
         bagname = sessionNames.back();
         string cmd = "mkdir " + savepath + bagname + "/";
         int ss = system(cmd.c_str());
 
+        // 发布 历史 session 的轨迹和地图
         ResultOutput::instance().pub_global_path(multimap_scanPoses, pub_prev_path, ids);
         ResultOutput::instance().pub_globalmap(multimap_keyframes, ids, pub_pmap);
 
+        // 重置因子图与索引映射
         initial.clear(); graph = gtsam::NonlinearFactorGraph();
         ids.clear(); ids.push_back(std_managers.size()-1);
         stepsizes.clear(); stepsizes.push_back(0); stepsizes.push_back(0);
       }
 
+      // “数据源已结束 + 回环缓冲区已清空” → 回环线程安全退出
       if(is_finish && buf_lba2loop.empty())
       {
         break;
       }
-
+      // 没有新的 ScanPose 需要参与回环检测或者目前已经在执行一帧的回环检测
       if(buf_lba2loop.empty() || loop_detect == 1)
       {
         sleep(0.01); continue;
       }
+
+      // 初始化当前处理的 ScanPose 指针
       ScanPose *bl_head = nullptr;
       mtx_loop.lock();
+
+      // FIFO：按时间顺序处理 ScanPose
       if(!buf_lba2loop.empty())
       {
         bl_head = buf_lba2loop.front();
         buf_lba2loop.pop_front();
       }
       mtx_loop.unlock();
+
+      // 防止空指针参与后续逻辑
       if(bl_head == nullptr) continue;
 
       int cur_id = std_managers.size() - 1;
       scanPoses->push_back(bl_head);
       bl_local.push_back(bl_head);
+      //取当前 ScanPose 的状态
       IMUST xc = bl_head->x;
+      //转换为 GTSAM Pose3格式
       gtsam::Pose3 pose3(gtsam::Rot3(xc.R), gtsam::Point3(xc.p));
+      //当前session的第几个节点
       int g_pos = stepsizes.back();
+      //GTSAM的初值容器
       initial.insert(g_pos, pose3);
 
+      //step:构建位姿图边（里程计约束/先验）
       if(g_pos > 0)
       {
+        // 在位姿图中添加一条前一 ScanPose → 当前 ScanPose的里程计边
         gtsam::Vector samv6(scanPoses->at(buf_base-1)->v6);
         gtsam::noiseModel::Diagonal::shared_ptr v6_noise = gtsam::noiseModel::Diagonal::Variances(samv6);
         add_edge(g_pos-1, g_pos, scanPoses->at(buf_base-1)->x, xc, graph, v6_noise);
       }
       else
       {
+        // note:为当前session的第一个节点，加一个固定先验，防止图漂移
         gtsam::Pose3 pose3(gtsam::Rot3(xc.R), gtsam::Point3(xc.p));
         graph.addPrior(0, pose3, fixd_noise);
       }
 
+
+      //step:第一个 ScanPose 天然成为第一个关键帧参考
       if(buf_base == 0) x_key = xc;
+      //buf_base：当前 session 中 ScanPose的顺序编号,自增
+      //?:stepsizes.back():当前 session 在全局 GTSAM 位姿图中的起始索引偏移,为什么要自增？
       buf_base++; stepsizes.back() += 1;
 
+      //局部窗口不足10帧，不生成关键帧
       if(bl_local.size() < win_size) continue;
+
+      //计算当前帧和上一关键帧的相对旋转和平移
       double ang = Log(x_key.R.transpose() * xc.R).norm() * 57.3;
       double len = (xc.p - x_key.p).norm();
+
+      // 位姿变化太小，不生成关键帧。只滑动窗口
       if(ang < 5 && len < 0.1 && buf_base > win_size)
       {
         bl_local.front()->pvec = nullptr;
         bl_local.pop_front();
         continue;
       }
+
+      //里程累积
       for(double &jour: jours)
         jour += len;
+
+      // 更新关键帧参考位姿
       x_key = xc;
 
+      //step:构建关键帧点云，将滑窗内的历史帧点云变换到当前帧坐标系下
       PVecPtr pptr(new PVec);
       for(int i=0; i<win_size; i++)
       {
@@ -2026,17 +2097,21 @@ public:
           pptr->push_back(pv);
         }
       }
+
+      //step:清空窗口内点云引用
       for(int i=0; i<win_size; i++)
       {
         bl_local.front()->pvec = nullptr;
         bl_local.pop_front();
       }
 
+      //step:注册关键帧（位姿、id、里程、降采样点云）
       Keyframe *smp = new Keyframe(xc);
       smp->id = buf_base - 1;
       smp->jour = jours[cur_id];
       down_sampling_pvec(*pptr, voxel_size/10, *(smp->plptr));
 
+      //step:转换为pcl点云格式，作为BTC回环的输入
       plbtc->clear();
       pcl::PointXYZI ap;
       for(pointVar &pv: *pptr)
@@ -2045,20 +2120,37 @@ public:
         ap.x = wld[0]; ap.y = wld[1]; ap.z = wld[2];
         plbtc->push_back(ap);
       }
+
+      //关键帧集合插入
       mtx_keyframe.lock();
       keyframes->push_back(smp);
       mtx_keyframe.unlock();
 
+      //note:这里正式进入回环检测流程
+      //step:STDesc 回环描述子生成
       vector<STD> stds_vec;
       std_manager->GenerateSTDescs(plbtc, stds_vec, buf_base-1);
-      pair<int, double> search_result(-1, 0);
-      pair<Eigen::Vector3d, Eigen::Matrix3d> loop_transform;
-      vector<pair<STD, STD>> loop_std_pair;
+      pair<int, double> search_result(-1, 0);                    //回环候选ID
+      pair<Eigen::Vector3d, Eigen::Matrix3d> loop_transform;     //回环相对位姿
+      vector<pair<STD, STD>> loop_std_pair;                      //匹配成功的描述子对
 
+      //isGraph:是否需要把某个历史session纳入当前全局图
+      //isOpt:是否需要立即触发一次isam2优化
       bool isGraph = false, isOpt = false;
       int match_num = 0;
+      //遍历所有 session（当前 + 历史）,id == cur_id → 同 session 回环, id < cur_id → 跨 session 回环
       for(int id=0; id<=cur_id; id++)
       {
+        /**
+         * @brief STD描述子回环候选搜索
+         *
+         * stds_vec	               当前 Keyframe 的 STDesc
+         * search_result.first	   命中的历史 Keyframe index
+         * search_result.second	   STDesc 匹配分数
+         * loop_transform	       粗对齐结果（t, R）
+         * plane_cloud_vec_.back() 当前帧点云
+         *
+         */
         std_managers[id]->SearchLoop(stds_vec, search_result, loop_transform, loop_std_pair, std_manager->plane_cloud_vec_.back());
 
         if(search_result.first >= 0)
@@ -2067,42 +2159,75 @@ public:
           printf("score: %lf\n", search_result.second);
         }
 
+        // 描述子匹配得分阈值过滤
         if(search_result.first >= 0 && search_result.second > juds[id])
         {
+          //step:icp法向量一致性检验，防止描述子误匹配
           if(icp_normal(*(std_manager->plane_cloud_vec_.back()), *(std_managers[id]->plane_cloud_vec_[search_result.first]), loop_transform, icp_eigval))
           {
+            //历史关键帧在scanPoses中的索引
             int ord_bl = std_managers[id]->plane_cloud_vec_[search_result.first]->header.seq;
 
+            //从历史帧出发，根据回环相对位姿，推算出当前帧在世界坐标系中的位置与当前帧实际的位置之间的偏差
             IMUST &xx = multimap_scanPoses[id]->at(ord_bl)->x;
             double drift_p = (xx.R * loop_transform.first + xx.p - xc.p).norm();
 
             bool isPush = false;
             int step = -1;
+            // note:同session之间的回环
             if(id == cur_id)
             {
+              //计算两个关键帧之间的实际运动尺度
               double span = smp->jour - keyframes->at(search_result.first)->jour;
               printf("drift: %lf %lf\n", drift_p, span);
 
+              // 漂移相对运动距离足够小，接受该回环
               if(drift_p / span < ratio_drift)
               {
                 isPush = true;
+                //?:这里不理解
                 step = stepsizes.size() - 2;
 
+                //不是每个回环都优化，足够久没优化 + 漂移明显时优化
                 if(relc_counts[id] > curr_halt && drift_p > 0.10)
                 {
                   isOpt = true;
                   for(int &cnt: relc_counts) cnt = 0;
                 }
+                else
+                {
+                  std::cout
+                    << "[LoopOpt Skip] "
+                    << "id=" << id
+                    << " relc_count=" << relc_counts[id] << "/" << curr_halt
+                    << " drift_p=" << drift_p << " (th=0.10)"
+                    << std::endl;
+
+                }
+
+              }
+              else
+              {
+                std::cout << "[Loop Reject]"
+                    << " id=" << id
+                    << " drift_ratio=" << (drift_p / span)
+                    << " drift_p=" << drift_p
+                    << " span=" << span
+                    << " ratio_th=" << ratio_drift
+                    << std::endl;
               }
             }
+            // note:跨session的回环
             else
             {
+              //先判断这个session是否已经加入图
               for(int i=0; i<ids.size(); i++)
                 if(id == ids[i])
                   step = i;
 
               printf("drift: %lf %lf\n", drift_p, jours[id]);
 
+              //该session还没入图，代表首次跨session回环
               if(step == -1)
               {
                 isGraph = true;
@@ -2112,7 +2237,7 @@ public:
                 isPush = true;
                 jours[id] = 0;
               }
-              else
+              else  //已存在的跨session回环
               {
                 if(drift_p / jours[id] < 0.05)
                 {
@@ -2128,14 +2253,32 @@ public:
 
             }
 
+            // 是可信且值得被加入系统 的回环约束
             if(isPush)
             {
+              //当前关键帧成功匹配的回环数量+1
               match_num++;
+              /**
+               * @brief 回环边缓存队列
+               * id	                     回环匹配到的 session id（历史）
+               * cur_id	                 当前 session id
+               * ord_bl	                 历史关键帧在该 session 中的序号
+               * buf_base-1	             当前关键帧的全局序号
+               * loop_transform.second	 回环约束的旋转（R）
+               * loop_transform.first	 回环约束的平移（t）
+               * v6_init	             初始信息矩阵 / 置信度 / 协方差初始化
+               *
+               */
               lp_edges.push(id, cur_id, ord_bl, buf_base-1, loop_transform.second, loop_transform.first, v6_init);
+              // 这是一个已经入图的session
               if(step > -1)
               {
+                //stepsizes[step]：该 session 在 全局图中的起始 index, ord_bl:历史关键帧在该 session 内的局部编号
+                //id1 = 历史关键帧在全局图中的节点编号
+                //id2 = 当前关键帧在全局图中的节点编号
                 int id1 = stepsizes[step] + ord_bl;
                 int id2 = stepsizes.back() - 1;
+                //note:这里才是真正的添加回环边
                 add_edge(id1, id2, loop_transform.second, loop_transform.first, graph, odom_noise);
                 printf("addedge: (%d %d) (%d %d)\n", id, cur_id, ord_bl, buf_base-1);
               }
@@ -2150,39 +2293,59 @@ public:
         }
 
       }
+
+      //relc_counts 是一个每个 session的未触发有效回环的累计计数器,每来一个新关键帧，所有 session 的计数器都自增
       for(int &it: relc_counts) it++;
+
+      //把当前关键帧提取到的 STDesc 描述子 加入当前 session 的 STDescManager,后续帧才能用这些描述子做回环搜索
       std_manager->AddSTDescs(stds_vec);
 
+      //step:是否需要重构位姿图（比如有新session加入时）
       if(isGraph)
       {
         build_graph(initial, graph, cur_id, lp_edges, odom_noise, ids, stepsizes, 1);
       }
 
+      //step:是否触发图优化
       if(isOpt)
       {
+        //初始化isam2
         gtsam::ISAM2Params parameters;
         parameters.relinearizeThreshold = 0.01;
         parameters.relinearizeSkip = 1;
+
+        //创建一个isam2实例
         gtsam::ISAM2 isam(parameters);
+        //提交图和初值
         isam.update(graph, initial);
 
+        //额外跑几次迭代，让解充分收敛
         for(int i=0; i<5; i++) isam.update();
+
+        //得到优化后的所有位姿
         gtsam::Values results = isam.calculateEstimate();
         int resultsize = results.size();
 
+        // 保存当前关键帧的位姿
         IMUST x1 = scanPoses->at(buf_base-1)->x;
         int idsize = ids.size();
 
         history_kfsize = 0;
-        for(int ii=0; ii<idsize; ii++)
+
+        //step: multimap_scanPoses状态更新
+        for(int ii=0; ii<idsize; ii++)      //遍历图结构中的每个session
         {
           int tip = ids[ii];
+          //遍历该 session 在 全局图中的节点
           for(int j=stepsizes[ii]; j<stepsizes[ii+1]; j++)
           {
+            //j：全局节点编号, ord：session 内部编号
             int ord = j - stepsizes[ii];
             multimap_scanPoses[tip]->at(ord)->set_state(results.at(j).cast<gtsam::Pose3>());
           }
         }
+
+        // step:更新关键帧位姿
         mtx_keyframe.lock();
         for(int ii=0; ii<idsize; ii++)
         {
@@ -2192,18 +2355,26 @@ public:
         }
         mtx_keyframe.unlock();
 
+        //重置 initial，为下一次优化做准备
         initial.clear();
+
+        // 用当前优化结果作为下一次优化的初始值
         for(int i=0; i<resultsize; i++)
           initial.insert(i, results.at(i).cast<gtsam::Pose3>());
 
-        IMUST x3 = scanPoses->at(buf_base-1)->x;
+        // step:计算位姿补偿
+        IMUST x3 = scanPoses->at(buf_base-1)->x;        //当前帧优化之后的位姿
         dx.p = x3.p - x3.R * x1.R.transpose() * x1.p;
         dx.R = x3.R * x1.R.transpose();
+        // 更新当前关键帧位姿
         x_key = x3;
 
+
+        //step:局部地图重建
         PVec pvec_tem;
         int subsize = keyframes->size();
         int init_num = 5;
+        // 遍历最新的5个关键帧
         for(int i=subsize-init_num; i<subsize; i++)
         {
           if(i < 0) continue;
@@ -2211,6 +2382,8 @@ public:
           sp.exist = 0;
           pvec_tem.reserve(sp.plptr->size());
           pointVar pv; pv.var.setZero();
+
+          // 点从局部坐标转换到世界坐标新
           for(PointType &ap: sp.plptr->points)
           {
             pv.pnt << ap.x, ap.y, ap.z;
@@ -2219,11 +2392,15 @@ public:
               pv.var(j, j) = ap.normal[j];
             pvec_tem.push_back(pv);
           }
+
+          //点云体素化并构建平面
           cut_voxel(map_loop, pvec_tem, win_size, 0);
         }
 
+        // ?:处理5个滑动关键帧之外的历史关键帧
         if(subsize > init_num)
         {
+          //清空历史关键帧 KD-tree
           pl_kdmap->clear();
           for(int i=0; i<subsize-init_num; i++)
           {
@@ -2235,14 +2412,23 @@ public:
             pl_kdmap->push_back(pp);
           }
 
+          //更新KD-tree
           kd_keyframes.setInputCloud(pl_kdmap);
           history_kfsize = pl_kdmap->size();
         }
+        // note:发生回环标志位
         loop_detect = 1;
+        std::cout << "loop detect and optimize." << std::endl;
 
+        // 除去当前session
         vector<int> ids2 = ids; ids2.pop_back();
+        // 发布历史轨迹
         ResultOutput::instance().pub_global_path(multimap_scanPoses, pub_prev_path, ids2);
+
+        // 发布历史全局地图
         ResultOutput::instance().pub_globalmap(multimap_keyframes, ids2, pub_pmap);
+
+        // 发布当前session地图
         ids2.clear(); ids2.push_back(ids.back());
         ResultOutput::instance().pub_globalmap(multimap_keyframes, ids2, pub_cmap);
 
@@ -2250,12 +2436,15 @@ public:
 
     }
 
+    // 释放STDescManager
     for(int i=0; i<std_managers.size(); i++)
       delete std_managers[i];
     malloc_trim(0);
 
+    //note:只有通过rosparam发布is_finish参数才会进行HBA
     if(is_finish)
     {
+      //当前 session 没有有效关键帧,删除相关的数据结构
       if(keyframes->empty())
       {
         sessionNames.pop_back();
@@ -2272,31 +2461,39 @@ public:
         printf("no data\n"); return;
       }
 
+      //note:构建最终位姿图
       int cur_id = std_managers.size() - 1;
       build_graph(initial, graph, cur_id, lp_edges, odom_noise, ids, stepsizes, 0);
 
+      //step:全局BA
       topDownProcess(initial, graph, ids, stepsizes);
     }
 
     if(is_save_map)
     {
+      //保存每个session的轨迹
       for(int i=0; i<ids.size(); i++)
         FileReaderWriter::instance().save_pose(*(multimap_scanPoses[ids[i]]), sessionNames[ids[i]], "/alidarState.txt", savepath);
 
+      //保存回环边
       FileReaderWriter::instance().pgo_edges_io(lp_edges, sessionNames, 1, savepath, bagname);
     }
 
+    //释放所有 ScanPose
     for(int i=0; i<multimap_scanPoses.size(); i++)
     {
       for(int j=0; j<multimap_scanPoses[i]->size(); j++)
         delete multimap_scanPoses[i]->at(j);
     }
+
+    //释放所有 Keyframe
     for(int i=0; i<multimap_keyframes.size(); i++)
     {
       for(int j=0; j<multimap_keyframes[i]->size(); j++)
         delete multimap_keyframes[i]->at(j);
     }
 
+    //内存回收
     malloc_trim(0);
   }
   // end of loop thread
@@ -2556,6 +2753,7 @@ public:
   }
 
   // The main thread of bottom up in global mapping
+  //note:全局建图
   void thd_globalmapping(ros::NodeHandle &n)
   {
     n.param<double>("GBA/voxel_size", gba_voxel_size, 1.0);
