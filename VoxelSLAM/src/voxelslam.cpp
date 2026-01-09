@@ -486,8 +486,10 @@ public:
 
   }
 
+  //note:运动补偿，基于 IMU 连续积分结果，对原始 LiDAR 点云进行逐点运动补偿，并将点统一表达在当前帧 IMU 坐标系下，写入 pvec
   void motion_blur(pcl::PointCloud<PointType> &pl, PVec &pvec, IMUST xc, IMUST xl, deque<sensor_msgs::Imu::Ptr> &imus, double pcl_beg_time, IMUST &extrin_para)
   {
+    //note:用上一帧（xl）的 IMU 偏置作为当前帧（xc）的初始偏置假设，保证滑窗内点云去畸变的一致性与数值稳定性
     xc.bg = xl.bg; xc.ba = xl.ba;
     Eigen::Vector3d acc_imu, angvel_avr, acc_avr, vel_imu(xc.v), pos_imu(xc.p);
     Eigen::Matrix3d R_imu(xc.R);
@@ -561,13 +563,28 @@ public:
     }
   }
 
-  int motion_init(vector<pcl::PointCloud<PointType>::Ptr> &pl_origs, vector<deque<sensor_msgs::Imu::Ptr>> &vec_imus, vector<double> &beg_times, Eigen::MatrixXd *hess, LidarFactor &voxhess, vector<IMUST> &x_buf, unordered_map<VOXEL_LOC, OctoTree*> &surf_map, unordered_map<VOXEL_LOC, OctoTree*> &surf_map_slide, vector<PVecPtr> &pvec_buf, int win_size, vector<vector<SlideWindow*>> &sws, IMUST &x_curr, deque<IMU_PRE*> &imu_pre_buf, IMUST &extrin_para)
+  //int motion_init(vector<pcl::PointCloud<PointType>::Ptr> &pl_origs, vector<deque<sensor_msgs::Imu::Ptr>> &vec_imus, vector<double> &beg_times, Eigen::MatrixXd *hess, LidarFactor &voxhess, vector<IMUST> &x_buf, unordered_map<VOXEL_LOC, OctoTree*> &surf_map, unordered_map<VOXEL_LOC, OctoTree*> &surf_map_slide, vector<PVecPtr> &pvec_buf, int win_size, vector<vector<SlideWindow*>> &sws, IMUST &x_curr, deque<IMU_PRE*> &imu_pre_buf, IMUST &extrin_para)
+  int motion_init(
+    vector<pcl::PointCloud<PointType>::Ptr> &pl_origs,           // 滑窗 LiDAR 原始点云
+    vector<deque<sensor_msgs::Imu::Ptr>> &vec_imus,              // 对应每帧的 IMU 数据
+    vector<double> &beg_times,                                   // 每帧点云的起始时间戳
+    Eigen::MatrixXd *hess,                                       // note:输出: Hessian 矩阵，用于后续优化
+    LidarFactor &voxhess,                                        // note:输出: LiDAR 因子，用于滑窗 BA 优化
+    vector<IMUST> &x_buf,                                        // 滑窗每帧状态(位姿+速度+偏置)
+    unordered_map<VOXEL_LOC, OctoTree*> &surf_map,               // 滑窗全局体素地图
+    unordered_map<VOXEL_LOC, OctoTree*> &surf_map_slide,         // 当前滑窗体素地图(临时)
+    vector<PVecPtr> &pvec_buf,                                   // 滑窗世界系点云
+    int win_size,                                                 // 滑窗大小
+    vector<vector<SlideWindow*>> &sws,
+    IMUST &x_curr,                                                // 输出: 初始化后的当前帧状态
+    deque<IMU_PRE*> &imu_pre_buf,                                 // IMU 预积分缓存
+    IMUST &extrin_para)                                            // 外参( LiDAR->IMU )
   {
     PLV(3) pwld;                             // 世界系点云
     double last_g_norm = x_buf[0].g.norm();  // 初始重力模长
     int converge_flag = 0;
 
-    // 保存“正常建图阶段”的判定阈值
+    // 保存正常建图阶段的判定阈值
     double min_eigen_value_orig = min_eigen_value;       // 0.0025
     vector<double> eigen_value_array_orig = plane_eigen_value_thre;     // 0.25 0.25 0.25 0.25
 
@@ -581,7 +598,8 @@ public:
     int converge_times = 0;
     bool is_degrade = true;
     Eigen::Vector3d eigvalue; eigvalue.setZero();
-    // 最多迭代10次
+
+    // note:主循环最多迭代10次
     for(int iterCnt = 0; iterCnt < 10; iterCnt++)
     {
       // 若已经收敛，则收紧判定条件
@@ -591,13 +609,13 @@ public:
         plane_eigen_value_thre = eigen_value_array_orig;
       }
 
-      // 清空上一轮 voxel 地图
+      // step:清空上一轮 voxel 地图
       vector<OctoTree*> octos;
       for(auto iter=surf_map.begin(); iter!=surf_map.end(); ++iter)
       {
-        iter->second->tras_ptr(octos);
-        iter->second->clear_slwd(sws[0]);
-        delete iter->second;
+        iter->second->tras_ptr(octos);     // 转存 OctoTree 指针
+        iter->second->clear_slwd(sws[0]);  // 清除滑窗中的数据
+        delete iter->second;               // 删除 OctoTree 对象
       }
       for(int i=0; i<octos.size(); i++)
         delete octos[i];
@@ -606,14 +624,15 @@ public:
       // 遍历滑窗，处理每一帧lidar点云
       for(int i=0; i<win_size; i++)
       {
-        // 点云去畸变
+        // step:点云去畸变,更新pvec_buf[i]
         pwld.clear();
+        //note:这里每次迭代的时候都会清空滑窗内的局部点云
         pvec_buf[i]->clear();
         int l = i==0 ? i : i - 1;
         motion_blur(*pl_origs[i], *pvec_buf[i], x_buf[i], x_buf[l], vec_imus[i], beg_times[i], extrin_para);
 
-        // 若已经收敛则考虑协方差传递
-        if(converge_flag == 1)
+        // step:变换点云到世界系
+        if(converge_flag == 1)     // 若已经收敛则考虑协方差传递
         {
           for(pointVar &pv: *pvec_buf[i])
             calcBodyVar(pv.pnt, dept_err, beam_err, pv.var);
@@ -626,7 +645,7 @@ public:
             pwld.push_back(x_buf[i].R * pv.pnt + x_buf[i].p);
         }
 
-        // 点云体素化并构建平面
+        // step:点云体素化并构建平面，注意这里传的是0号线程的sws[0]
         cut_voxel(surf_map, pvec_buf[i], i, surf_map_slide, win_size, pwld, sws[0]);
       }
 
@@ -747,13 +766,22 @@ public:
   IMUEKF odom_ekf;                       //IMU–LiDAR 紧耦合里程计 EKF,负责前端状态预测与更新
   unordered_map<VOXEL_LOC, OctoTree*> surf_map, surf_map_slide;     //?:主体素地图：当前滑窗内&历史保留的体素，滑动窗口专用体素地图，用于localBA
   double down_size;                      //点云下采样体素尺寸（odometry 阶段）
+  pcl::PointCloud<PointType>::Ptr pl_tree; //用于初始化阶段点云特征匹配
 
   int win_size;                          //局部BA的滑动窗口大小
   vector<IMUST> x_buf;                   //滑动窗口内每一帧的系统状态
   vector<PVecPtr> pvec_buf;              //滑动窗口内每一帧的点云
   deque<IMU_PRE*> imu_pre_buf;           //相邻扫描帧之间的 IMU 预积分因子（Local BA 用）
   int win_count = 0, win_base = 0;       //当前窗口中已有的帧数/滑窗起始帧索引（边缘化时使用）
-  vector<vector<SlideWindow*>> sws;      //?:多线程体素滑窗结构（每个线程维护自己的 SlideWindow 列表）
+
+  /**
+   * @brief 多线程体素滑窗回收池
+   * SlideWindow 是每个体素节点内部的时间滑窗数据容器，负责按帧缓存点与局部几何
+   * 第一维：开辟的多线程数
+   * sws 本质上就是一个 SlideWindow 的空闲对象池 / 回收池
+   * 它不直接参与优化计算，而是用于复用已经不用的滑窗对象，避免频繁 new / delete
+   */
+  vector<vector<SlideWindow*>> sws;
 
   vector<ScanPose*> *scanPoses;          //note:所有历史 scan 的位姿集合（回环检测 & 全局更新使用）
   mutex mtx_loop;
@@ -874,7 +902,7 @@ public:
       exit(0);
     }
 
-    // note:初始化多线程体素滑窗容器
+    // ?:初始化多线程体素滑窗容器,但是为什么只用sws[0]
     sws.resize(thread_num);
     cout << "bagname: " << bagname << endl;
   }
@@ -989,10 +1017,13 @@ public:
   }
 
   // The point-to-plane alignment for initialization
-  pcl::PointCloud<PointType>::Ptr pl_tree;
   void lio_state_estimation_kdtree(PVecPtr pptr)
   {
-    static pcl::KdTreeFLANN<PointType> kd_map;
+
+    static pcl::KdTreeFLANN<PointType> kd_map;                // KD-tree，用于在历史地图点云中做最近邻搜索
+    pl_tree.reset(new pcl::PointCloud<PointType>());          // 用于初始化阶段构建kd-tree的点云
+
+    // 如果当前地图点数量太少，认为还处于初始化冷启动阶段,将当前帧点云转到世界系下地图点云
     if(pl_tree->size() < 100)
     {
       for(pointVar pv: *pptr)
@@ -1003,97 +1034,135 @@ public:
         pl_tree->push_back(pp);
       }
       kd_map.setInputCloud(pl_tree);
+
+      // 地图太稀疏，不做配准，直接返回
       return;
     }
 
-    const int num_max_iter = 4;
-    IMUST x_prop = x_curr;
+    const int num_max_iter = 4;                               // 最大迭代次数
+    IMUST x_prop = x_curr;                                    // 状态预测值
     int psize = pptr->size();
-    bool EKF_stop_flg = 0, flg_EKF_converged = 0;
-    Eigen::Matrix<double, DIM, DIM> G, H_T_H, I_STATE;
+    bool EKF_stop_flg = 0, flg_EKF_converged = 0;             // EKF 终止标志
+    Eigen::Matrix<double, DIM, DIM> G, H_T_H, I_STATE;        // EKF 相关矩阵
     G.setZero(); H_T_H.setZero(); I_STATE.setIdentity();
 
-    double max_dis = 2*2;
-    vector<float> sqdis(NMATCH); vector<int> nearInd(NMATCH);
-    PLV(3) vecs(NMATCH);
-    int rematch_num = 0;
-    Eigen::Matrix<double, DIM, DIM> cov_inv = x_curr.cov.inverse();
+    double max_dis = 2*2;                                     // 最大搜索距离（平方距离）
+    vector<float> sqdis(NMATCH); vector<int> nearInd(NMATCH); // KD-tree 最近邻搜索结果
+    PLV(3) vecs(NMATCH);                                      // 用于存储局部平面法向
+    int rematch_num = 0;                                      // 重新匹配次数
+    Eigen::Matrix<double, DIM, DIM> cov_inv = x_curr.cov.inverse();   // 当前状态协方差的逆（信息矩阵），P-1
 
-    Eigen::Matrix<double, NMATCH, 1> b;
+    Eigen::Matrix<double, NMATCH, 1> b;                       // 平面拟合中 Ax = b 的 b（这里固定为 -1）
     b.setOnes();
     b *= -1.0f;
 
-    vector<double> ds(psize, -1);
-    PLV(3) directs(psize);
-    bool refind = true;
+    vector<double> ds(psize, -1);                             // 每个点对应的平面距离 d（-1 表示无效）
+    PLV(3) directs(psize);                                    // 每个点对应的平面法向量
+    bool refind = true;                                       // 是否重新进行 KD-tree 匹配
 
+    // 迭代的 ICP + EKF
     for(int iterCount=0; iterCount<num_max_iter; iterCount++)
     {
       Eigen::Matrix<double, 6, 6> HTH; HTH.setZero();
       Eigen::Matrix<double, 6, 1> HTz; HTz.setZero();
       int valid = 0;
+
+      //step:ICP部分构造正规方程
       for(int i=0; i<psize; i++)
       {
+
+        //当前帧点云转换到世界坐标系
         pointVar &pv = pptr->at(i);
         Eigen::Matrix3d phat = hat(pv.pnt);
         Eigen::Vector3d wld = x_curr.R * pv.pnt + x_curr.p;
 
+        // 是否要重新搜索最近邻更新法向量
         if(refind)
         {
+          // kd-tree最近邻搜索（5个）
           PointType apx;
           apx.x = wld[0]; apx.y = wld[1]; apx.z = wld[2];
           kd_map.nearestKSearch(apx, NMATCH, nearInd, sqdis);
 
+          // 用最近邻点构建平面拟合矩阵 A
           Eigen::Matrix<double, NMATCH, 3> A;
           for(int i=0; i<NMATCH; i++)
           {
             PointType &pp = pl_tree->points[nearInd[i]];
             A.row(i) << pp.x, pp.y, pp.z;
           }
+
+          // 求解平面法向量（Ax = -1）
           Eigen::Vector3d direct = A.colPivHouseholderQr().solve(b);
+          // 检查拟合平面是否合理
           bool check_flag = false;
           for(int i=0; i<NMATCH; i++)
           {
+            // 判断点到平面的残差是否过大(10cm?)
             if(fabs(direct.dot(A.row(i)) + 1.0) > 0.1)
               check_flag = true;
           }
 
+          // 平面不可靠，标记为无效
           if(check_flag)
           {
             ds[i] = -1;
             continue;
           }
 
+          //对法向量归一化
           double d = 1.0 / direct.norm();
           // direct *= d;
           ds[i] = d;
           directs[i] = direct * d;
         }
 
+        // 如果该点有有效平面
         if(ds[i] >= 0)
         {
+          // 点到平面的代数距离
           double pd2 = directs[i].dot(wld) + ds[i];
+
+          // 点到平面误差的 列Jacobian（6x1）
           Eigen::Matrix<double, 6, 1> jac_s;
           jac_s.head(3) = phat * x_curr.R.transpose() * directs[i];
           jac_s.tail(3) = directs[i];
 
+          // 累加正规方程，注意因为jac_s被声明为列J，公式推导里的JTJ（行J）
           HTH += jac_s * jac_s.transpose();
           HTz += jac_s * (-pd2);
           valid++;
         }
       }
 
+      //step:本质上是用 EKF 的信息形式来解 ICP 的观测模型
+
+      // 将 HTH 填入 EKF 的观测矩阵
       H_T_H.block<6, 6>(0, 0) = HTH;
+
+      // note: /1000 是 人为降低先验权重，防止过强约束
+      // note:本质上是融合了ICP观测与预测先验之后的后验协方差矩阵，它决定了更相信预测还是更相信预测部分
       Eigen::Matrix<double, DIM, DIM> K_1 = (H_T_H + cov_inv / 1000).inverse();
+
+      // EKF 卡尔曼增益
       G.block<DIM, 6>(0, 0) = K_1.block<DIM, 6>(0, 0) * HTH;
+
+      // 当前预测(IMU提供）与当前估计之间的差
       Eigen::Matrix<double, DIM, 1> vec = x_prop - x_curr;
+
+      // solution:计算状态增量，这里其实有个计算trick，就是根据后验协方差矩阵反解cov_inv，再带入solution可以简化
       Eigen::Matrix<double, DIM, 1> solution = K_1.block<DIM, 6>(0, 0) * HTz + vec - G.block<DIM, 6>(0, 0) * vec.block<6, 1>(0, 0);
 
+      // 更新状态
       x_curr += solution;
+
+      // 提取旋转和平移增量
       Eigen::Vector3d rot_add = solution.block<3, 1>(0, 0);
       Eigen::Vector3d tra_add = solution.block<3, 1>(3, 0);
-
+      // 默认不重新匹配
       refind = false;
+
+      // 收敛判据（角度 < 0.01°，位移 < 1.5cm）
       if ((rot_add.norm() * 57.3 < 0.01) && (tra_add.norm() * 100 < 0.015))
       {
         refind = true;
@@ -1101,13 +1170,16 @@ public:
         rematch_num++;
       }
 
+      // 倒数第二次迭代仍未收敛，强制重新匹配
       if(iterCount == num_max_iter-2 && !flg_EKF_converged)
       {
         refind = true;
       }
 
+      // 满足终止条件(2次以上收敛或达到最大迭代次数）
       if(rematch_num >= 2 || (iterCount == num_max_iter-1))
       {
+        // step:更新协方差P=(I-KH)P
         x_curr.cov = (I_STATE - G) * x_curr.cov;
         EKF_stop_flg = true;
       }
@@ -1116,6 +1188,8 @@ public:
     }
 
     double tt1 = ros::Time::now().toSec();
+
+    // 将当前帧点云加入地图
     for(pointVar pv: *pptr)
     {
       pv.pnt = x_curr.R * pv.pnt + x_curr.p;
@@ -1123,7 +1197,9 @@ public:
       ap.x = pv.pnt[0]; ap.y = pv.pnt[1]; ap.z = pv.pnt[2];
       pl_tree->push_back(ap);
     }
+    // 对地图进行体素降采样
     down_sampling_voxel(*pl_tree, 0.5);
+    // 更新kd-tree
     kd_map.setInputCloud(pl_tree);
     double tt2 = ros::Time::now().toSec();
   }
@@ -1276,45 +1352,50 @@ public:
   //note:系统初始化
   int initialization(deque<sensor_msgs::Imu::Ptr> &imus, Eigen::MatrixXd &hess, LidarFactor &voxhess, PLV(3) &pwld, pcl::PointCloud<PointType>::Ptr pcl_curr)
   {
+    //加static关键字，只初始化一次，生命周期持续到程序结束
+    //step:初始化需要累积多帧 LiDAR + IMU 数据（win_size 帧）来完成一个滑窗初始化
     static vector<pcl::PointCloud<PointType>::Ptr> pl_origs;
     static vector<double> beg_times;
     static vector<deque<sensor_msgs::Imu::Ptr>> vec_imus;
 
     pcl::PointCloud<PointType>::Ptr orig(new pcl::PointCloud<PointType>(*pcl_curr));
-    // IMU预测、运动补偿
+    // step:IMU预测、运动补偿
     if(odom_ekf.process(x_curr, *pcl_curr, imus) == 0)
       return 0;
 
+    //首帧保存初始重力标定值
     if(win_count == 0)
       imupre_scale_gravity = odom_ekf.scale_gravity;
 
+    //step:点云降采样 & 协方差计算
     PVecPtr pptr(new PVec);
     double downkd = down_size >= 0.5 ? down_size : 0.5;
-    // ?:点云降采样,这里采用的是体素均值降采样，不是原始点合理吗
-    down_sampling_voxel(*pcl_curr, downkd);
+    down_sampling_voxel(*pcl_curr, downkd);        // ?:点云降采样,这里采用的是体素均值降采样，不是原始点合理吗
     // 协方差计算及点云变换到IMU坐标系
     var_init(extrin_para, *pcl_curr, pptr, dept_err, beam_err);
-    // 用于初始化的lidar观测更新部分
+
+    // step:icp+EKF迭代更新当前帧位姿x_curr
     lio_state_estimation_kdtree(pptr);
 
-    pwld.clear();
     // 点云转化到世界坐标系下，点云协方差传播
+    pwld.clear();
     pvec_update(pptr, x_curr, pwld);
 
-    // 滑窗扫描帧计数
+    // step:当前帧位姿及点云（IMU系下）进滑动窗口
     win_count++;
     x_buf.push_back(x_curr);
     pvec_buf.push_back(pptr);
+    //世界系点云用于可视化
     ResultOutput::instance().pub_localtraj(pwld, 0, x_curr, sessionNames.size()-1, pcl_path);
 
-    // IMU预积分
+    // step:滑动窗口两帧之间IMU预积分
     if(win_count > 1)
     {
       imu_pre_buf.push_back(new IMU_PRE(x_buf[win_count-2].bg, x_buf[win_count-2].ba));
       imu_pre_buf[win_count-2]->push_imu(imus);
     }
 
-    // 点云降采样(最接近体素质心)
+    // step:原始点云降采样(最接近体素质心)
     pcl::PointCloud<PointType> pl_mid = *orig;
     down_sampling_close(*orig, down_size);
     if(orig->size() < 1000)
@@ -1330,12 +1411,29 @@ public:
     beg_times.push_back(odom_ekf.pcl_beg_time);
     vec_imus.push_back(imus);
 
+
+    //step:调用核心初始化函数
     int is_success = 0;
-    // note:使用了win_size(10)帧 LiDAR 点云数据以及对应IMU，作为一个时间窗口来完成初始化（差不多就是一秒数据）
     if(win_count >= win_size)
     {
       // 初始化核心函数
-      is_success = Initialization::instance().motion_init(pl_origs, vec_imus, beg_times, &hess, voxhess, x_buf, surf_map, surf_map_slide, pvec_buf, win_size, sws, x_curr, imu_pre_buf, extrin_para);
+      //is_success = Initialization::instance().motion_init(pl_origs, vec_imus, beg_times, &hess, voxhess, x_buf, surf_map, surf_map_slide, pvec_buf, win_size, sws, x_curr, imu_pre_buf, extrin_para);
+      is_success = Initialization::instance().motion_init(
+        pl_origs,         // 滑窗内的原始 LiDAR 点云
+        vec_imus,         // 每帧对应的 IMU 数据队列
+        beg_times,        // 每帧 LiDAR 点云的起始时间戳
+        &hess,            // 输出：优化用的 Hessian 矩阵
+        voxhess,          // 输出：LiDAR 因子，包含体素点云特征和平面约束
+        x_buf,            // 滑窗每帧的状态（位姿、速度、偏置）
+        surf_map,         // 全局体素地图，用于构建滑窗局部地图
+        surf_map_slide,   // 临时滑窗体素地图，用于切分点云和局部优化
+        pvec_buf,         // 滑窗每帧点云（IMU系）
+        win_size,         // 滑窗帧数
+        sws,              // 滑窗数据结构，用于体素化和局部地图优化
+        x_curr,           // 输出：初始化完成后的当前帧状态
+        imu_pre_buf,      // IMU 预积分缓存
+        extrin_para);     // LiDAR->IMU 外参
+
 
       if(is_success == 0)
         return -1;
@@ -1520,44 +1618,50 @@ public:
   void thd_odometry_localmapping(ros::NodeHandle &n)
   {
     PLV(3) pwld;                            // 当前帧在世界系下的点云（用于可视化/发布）
-    double down_sizes[3] = {0.1, 0.2, 0.4};
-    Eigen::Vector3d last_pos(0, 0 ,0);      // 上一次累计里程的位置
+    // double down_sizes[3] = {0.1, 0.2, 0.4}; // nouse:多分辨率 voxel 下采样尺寸
+    Eigen::Vector3d last_pos(0, 0 ,0);      // 上一次累计里程的位置，用于跟踪累积行驶距离jour
     double jour = 0;
-    int counter = 0;
+    // int counter = 0;                     // nouse
 
-    pcl::PointCloud<PointType>::Ptr pcl_curr(new pcl::PointCloud<PointType>());
-    int motion_init_flag = 1;
-    pl_tree.reset(new pcl::PointCloud<PointType>());
-    vector<pcl::PointCloud<PointType>::Ptr> pl_origs;
-    vector<double> beg_times;
-    vector<deque<sensor_msgs::Imu::Ptr>> vec_imus;
-    bool release_flag = false;                // 是否允许释放历史 voxel
-    int degrade_cnt = 0;                      // 退化计数器
-    LidarFactor voxhess(win_size);            // ?:Lidar BA优化因子
+    pcl::PointCloud<PointType>::Ptr pcl_curr(new pcl::PointCloud<PointType>());   // 当前帧同步得到的原始点云
+
+    int motion_init_flag = 1;                                                     // 是否处于初始化阶段
+
+
+    // vector<pcl::PointCloud<PointType>::Ptr> pl_origs;
+    // vector<double> beg_times;
+    // vector<deque<sensor_msgs::Imu::Ptr>> vec_imus;
+
+    bool release_flag = false;                // 触发历史地图释放
+    int degrade_cnt = 0;                      // 退化计数器，用于系统reset
+
+    LidarFactor voxhess(win_size);            // Lidar BA优化因子
     const int mgsize = 1;                     // 每次边缘化 1 帧
-    Eigen::MatrixXd hess;
+    Eigen::MatrixXd hess;                     // ?:滑窗 BA 的 Hessian
     // note:主循环
     while(n.ok())
     {
       ros::spinOnce();
-      // step: 回环触发后局部地图更新
+      // step: 回环触发后位姿更新，地图更新，重置累计距离（？）
       if(loop_detect == 1)
       {
-        loop_update(); last_pos = x_curr.p; jour = 0;
+        loop_update();
+        last_pos = x_curr.p;
+        jour = 0;
       }
 
-      // 退出条件
+      // 程序结束检测
       n.param<bool>("finish", is_finish, false);
       if(is_finish)
       {
         break;
       }
 
-      deque<sensor_msgs::Imu::Ptr> imus;
       // step:lidar和IMU数据同步
+      deque<sensor_msgs::Imu::Ptr> imus;
       if(!sync_packages(pcl_curr, imus, odom_ekf))
       {
-        if(octos_release.size() != 0)
+        if(octos_release.size() != 0)         //note:回收待释放的八叉树结构（主要来自回环校正的旧地图以及系统重置的旧地图）
         {
           int msize = octos_release.size();
           if(msize > 1000) msize = 1000;
@@ -1568,32 +1672,39 @@ public:
           }
           malloc_trim(0);
         }
-        else if(release_flag)
+        else if(release_flag)                 //note:基于 jour 的历史地图释放
         {
-          release_flag = false;
-          vector<OctoTree*> octos;
+          release_flag = false;               // 进入释放流程，立刻清除标志
+          vector<OctoTree*> octos;            // 用于统一释放的 OctoTree 指针容器
+
+          // 遍历 surf_map
           for(auto iter=surf_map.begin(); iter!=surf_map.end();)
           {
+            //计算当前 voxel 与当前位置的距离
             int dis = jour - iter->second->jour;
+
+            // note:700米范围内的体素地图保留，之外的删除
             if(dis < 700)
-            // if(dis < 200)
             {
               iter++;
             }
             else
             {
               octos.push_back(iter->second);
-              iter->second->tras_ptr(octos);
-              surf_map.erase(iter++);
+              iter->second->tras_ptr(octos);   //将该 OctoTree 所有子节点指针加入 octos
+              surf_map.erase(iter++);          //从 surf_map 中移除该 voxel
             }
           }
+
+          //统一释放所有 OctoTree 内存
           int ocsize = octos.size();
           for(int i=0; i<ocsize; i++)
             delete octos[i];
           octos.clear();
+          //将空闲内存从进程堆中归还给操作系统
           malloc_trim(0);
         }
-        else if(sws[0].size() > 10000)
+        else if(sws[0].size() > 10000)        //?:为什么只删除0线程滑动窗口的数据
         {
           for(int i=0; i<500; i++)
           {
@@ -1767,7 +1878,7 @@ public:
           }
         }
 
-        // 保存当前滑动窗口的点云
+        // 保存当前滑动窗口的点云pcd
         if(is_save_map)
         {
           for(int i=0; i<mgsize; i++)
@@ -2882,6 +2993,8 @@ int main(int argc, char **argv)
   pub_prev_path = n.advertise<sensor_msgs::PointCloud2>("/map_true", 100);
 
   VOXEL_SLAM vs(n);
+
+  //note:滑窗索引初始化
   mp = new int[vs.win_size];
   for(int i=0; i<vs.win_size; i++)
     mp[i] = i;

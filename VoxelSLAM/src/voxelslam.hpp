@@ -106,18 +106,23 @@ bool sync_packages(pcl::PointCloud<PointType>::Ptr &pl_ptr, deque<sensor_msgs::I
 {
   static bool pl_ready = false;
 
+  //step:点云数据准备
   if(!pl_ready)
   {
+    // 点云数据为空，返回
     if(pcl_buf.empty()) return false;
 
+    // 获取缓存中的第一帧点云和对应的时间
     mBuf.lock();
     pl_ptr = pcl_buf.front();
     p_imu.pcl_beg_time = time_buf.front();
     pcl_buf.pop_front(); time_buf.pop_front();
     mBuf.unlock();
 
+    // 计算点云结束时间，curvature 字段被用作偏移时间
     p_imu.pcl_end_time = p_imu.pcl_beg_time + pl_ptr->back().curvature;
 
+    // 点云无时间戳
     if(point_notime)
     {
       if(last_pcl_time < 0)
@@ -131,11 +136,14 @@ bool sync_packages(pcl::PointCloud<PointType>::Ptr &pl_ptr, deque<sensor_msgs::I
       last_pcl_time = p_imu.pcl_end_time;
     }
 
+    // 点云数据就绪
     pl_ready = true;
   }
 
+  // 如果点云未准备好，或者最新的IMU时间还未超过点云结束时间，则无法同步IMU，返回 false
   if(!pl_ready || imu_last_time <= p_imu.pcl_end_time) return false;
 
+  //step:从IMU缓存中取出与点云时间段对应的IMU数据
   mBuf.lock();
   double imu_time = imu_buf.front()->header.stamp.toSec();
   while((!imu_buf.empty()) && (imu_time < p_imu.pcl_end_time))
@@ -147,13 +155,16 @@ bool sync_packages(pcl::PointCloud<PointType>::Ptr &pl_ptr, deque<sensor_msgs::I
   }
   mBuf.unlock();
 
+  //imu数据异常
   if(imu_buf.empty())
   {
     printf("imu buf empty\n"); exit(0);
   }
 
+  //重置点云状态位
   pl_ready = false;
 
+  //保证两帧lidar之间有足够的IMU数据
   if(imus.size() > 4)
     return true;
   else

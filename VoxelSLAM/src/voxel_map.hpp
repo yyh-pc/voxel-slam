@@ -11,7 +11,7 @@
 #include <ros/ros.h>
 #include <fstream>
 
-struct pointVar 
+struct pointVar
 {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Eigen::Vector3d pnt;
@@ -61,7 +61,7 @@ void down_sampling_pvec(PVec &pvec, double voxel_size, pcl::PointCloud<PointType
     ap.normal_z = pv.var(2, 2);
     pl_keep.push_back(ap);
   }
- 
+
 }
 
 struct Plane
@@ -106,6 +106,7 @@ void Bf_var(const pointVar &pv, Eigen::Matrix<double, 9, 9> &bcov, const Eigen::
 }
 
 // The LiDAR BA factor in optimization
+// note:用于存储 LiDAR 点云聚类信息（voxel/cluster）和对应的误差项
 class LidarFactor
 {
 public:
@@ -113,7 +114,7 @@ public:
   vector<PointCluster> sig_vecs;
   vector<vector<PointCluster>> plvec_voxels;
   vector<double> coeffs;
-  PLV(3) eig_values; PLM(3) eig_vectors; 
+  PLV(3) eig_values; PLM(3) eig_vectors;
   vector<PointCluster> pcr_adds;
   int win_size;
 
@@ -153,7 +154,7 @@ public:
       //   sig_tran[i].transform(sig_orig[i], xs[i]);
       //   sig += sig_tran[i];
       // }
-      
+
       // const Eigen::Vector3d &vBar = sig.v / sig.N;
       // Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(sig.P/sig.N - vBar * vBar.transpose());
       // const Eigen::Vector3d &lmbd = saes.eigenvalues();
@@ -164,7 +165,7 @@ public:
       Eigen::Matrix3d U = eig_vectors[a];
       int NN = pcr_adds[a].N;
       Eigen::Vector3d vBar = pcr_adds[a].v / NN;
-      
+
       Eigen::Vector3d u[3] = {U.col(0), U.col(1), U.col(2)};
       Eigen::Vector3d &uk = u[kk];
       Eigen::Matrix3d ukukT = uk * uk.transpose();
@@ -189,7 +190,7 @@ public:
         Eigen::Vector3d PiRiTuk = Pi * RiTuk;
         viRiTuk[i] = vihat * RiTuk;
         viRiTukukT[i] = viRiTuk[i] * uk.transpose();
-        
+
         Eigen::Vector3d ti_v = xs[i].p - vBar;
         double ukTti_v = uk.dot(ti_v);
 
@@ -230,14 +231,14 @@ public:
           Hess.block<6, 6>(6*i, 6*j) += coe * Hb;
         }
       }
-      
+
       residual += coe * lmbd[kk];
     }
 
     for(int i=1; i<win_size; i++)
       for(int j=0; j<i; j++)
         Hess.block<6, 6>(6*i, 6*j) = Hess.block<6, 6>(6*j, 6*i).transpose();
-    
+
   }
 
   void evaluate_only_residual(const vector<IMUST> &xs, int head, int end, double &residual)
@@ -275,7 +276,7 @@ public:
 
       residual += coeffs[a] * lmbd[kk];
     }
-    
+
   }
 
   void clear()
@@ -289,7 +290,14 @@ public:
 
 };
 
-// The LM optimizer for LiDAR BA
+/**
+ * @brief The LM optimizer for LiDAR BA
+ * note:用于全局建图模块
+ * 对 LidarFactor 中的 LiDAR 点云信息进行 BA 优化。
+   使用 Levenberg-Marquardt (LM) 方法求解 pose 更新。
+   提供多线程加速。
+ *
+ */
 class Lidar_BA_Optimizer
 {
 public:
@@ -300,7 +308,7 @@ public:
     // int thd_num = 4;
     double residual = 0;
     Hess.setZero(); JacT.setZero();
-    PLM(-1) hessians(thd_num); 
+    PLM(-1) hessians(thd_num);
     PLV(-1) jacobins(thd_num);
 
     for(int i=0; i<thd_num; i++)
@@ -353,7 +361,7 @@ public:
 
     for(int i=0; i<thd_num; i++)
     {
-      if(i != 0) 
+      if(i != 0)
         mthreads[i]->join();
       else
         voxhess.evaluate_only_residual(x_stats, part*i, part*(i+1), residuals[i]);
@@ -398,7 +406,7 @@ public:
       Hess.leftCols(6).setZero();
       Hess.block<6, 6>(0, 0).setIdentity();
       JacT.head(6).setZero();
-      
+
       D.diagonal() = Hess.diagonal();
       dxi = (Hess + u*D).ldlt().solve(-JacT);
 
@@ -446,7 +454,13 @@ public:
 double imu_coef = 1e-4;
 // double imu_coef = 1e-8;
 #define DVEL 6
-// The LiDAR-Inertial BA optimizer
+
+/**
+ * @brief The LiDAR-Inertial BA optimizer
+ * note: 用于局部BA
+ * 将 LiDAR BA 与 IMU 预积分约束结合，做 LiDAR-Inertial BA
+ * 在优化中加入 IMU 残差项，并使用 imu_coef 缩放权重
+ */
 class LI_BA_Optimizer
 {
 public:
@@ -467,7 +481,7 @@ public:
     int thd_num = 5;
     double residual = 0;
     Hess.setZero(); JacT.setZero();
-    PLM(-1) hessians(thd_num); 
+    PLM(-1) hessians(thd_num);
     PLV(-1) jacobins(thd_num);
     vector<double> resis(thd_num, 0);
 
@@ -547,7 +561,7 @@ public:
 
     for(int i=0; i<thd_num; i++)
     {
-      if(i != 0) 
+      if(i != 0)
       {
         mthreads[i]->join(); delete mthreads[i];
       }
@@ -576,7 +590,7 @@ public:
 
     double hesstime = 0;
     double resitime = 0;
-  
+
     // for(int i=0; i<10; i++)
     for(int i=0; i<3; i++)
     {
@@ -587,7 +601,7 @@ public:
         hesstime += ros::Time::now().toSec() - tm;
         *hess = Hess;
       }
-      
+
       Hess.topRows(DIM).setZero();
       Hess.leftCols(DIM).setZero();
       Hess.block<DIM, DIM>(0, 0).setIdentity();
@@ -654,7 +668,11 @@ public:
 
 };
 
-// The LiDAR-Inertial BA optimizer with gravity optimization
+/**
+ * @brief The LiDAR-Inertial BA optimizer with gravity optimization
+ * note:用于初始化
+ * 在 LI_BA_Optimizer 基础上增加了重力向量优化
+ */
 class LI_BA_OptimizerGravity
 {
 public:
@@ -675,7 +693,7 @@ public:
     int thd_num = 5;
     double residual = 0;
     Hess.setZero(); JacT.setZero();
-    PLM(-1) hessians(thd_num); 
+    PLM(-1) hessians(thd_num);
     PLV(-1) jacobins(thd_num);
     vector<double> resis(thd_num, 0);
 
@@ -760,7 +778,7 @@ public:
 
     for(int i=0; i<thd_num; i++)
     {
-      if(i != 0) 
+      if(i != 0)
       {
         mthreads[i]->join(); delete mthreads[i];
       }
@@ -785,7 +803,7 @@ public:
     double residual1, residual2, q;
     bool is_calc_hess = true;
     vector<IMUST> x_stats_temp = x_stats;
-    
+
     for(int i=0; i<max_iter; i++)
     {
       if(is_calc_hess)
@@ -823,12 +841,12 @@ public:
 
       for(int j=0; j<win_size-1; j++)
         imus_factor[j]->update_state(dxi.block<DIM, 1>(DIM*j, 0));
-      
+
       double q1 = 0.5 * dxi.dot(u*D*dxi-JacT);
       residual2 = only_residual(x_stats_temp, voxhess, imus_factor);
       q = (residual1-residual2);
       // printf("iter%d: (%lf %lf) u: %lf v: %.1lf q: %.2lf %lf %lf\n", i, residual1, residual2, u, v, q/q1, q1, q);
-      
+
       if(q > 0)
       {
         x_stats = x_stats_temp;
@@ -858,7 +876,7 @@ public:
 
     }
     resis.push_back(residual2);
-    
+
   }
 
 };
@@ -892,13 +910,17 @@ struct Keyframe
 
 };
 
-// The sldingwindow in each voxel nodes
+/**
+ * @brief The sldingwindow in each voxel nodes
+ * SlideWindow 是某一个体素节点内部的滑动窗口缓存
+ * 用于暂存「最近 N 帧」在该体素中的观测数据
+ */
 class SlideWindow
 {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  vector<PVec> points;
-  vector<PointCluster> pcrs_local;
+  vector<PVec> points;               // 每一帧的原始点（带协方差、局部坐标）
+  vector<PointCluster> pcrs_local;   // ?:这帧的统计信息（平均点、协方差），方便后续快速建模或优化
 
   SlideWindow(int wdsize)
   {
@@ -936,16 +958,17 @@ class OctoTree
 {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  SlideWindow* sw = nullptr;
+  SlideWindow* sw = nullptr;             //滑动窗口：当前体素 最近 N 帧的观测
   PointCluster pcr_add;
   Eigen::Matrix<double, 9, 9> cov_add;
 
+  //固定地图（点簇和固定点），不再参与滑窗优化
   PointCluster pcr_fix;
   PVec point_fix;
 
   int layer, octo_state, wdsize;
-  OctoTree* leaves[8];
-  double voxel_center[3];
+  OctoTree* leaves[8];                  //八叉树子节点
+  double voxel_center[3];               //当前体素中心坐标
   double jour = 0;
   float quater_length;
 
@@ -969,24 +992,37 @@ public:
   inline void push(int ord, const pointVar &pv, const Eigen::Vector3d &pw, vector<SlideWindow*> &sws)
   {
     mVox.lock();
+    // 每个 OctoTree 叶节点只有一个 SlideWindow，获取 / 创建 SlideWindow
     if(sw == nullptr)
     {
+      //从sws里获取一个
       if(sws.size() != 0)
       {
         sw = sws.back();
         sws.pop_back();
-        sw->resize(wdsize);
+        sw->resize(wdsize);   //滑窗大小为10
       }
-      else
+      else   //没有就重新new一个
         sw = new SlideWindow(wdsize);
     }
+
+    // 标记当前体素有效
     if(!isexist) isexist = true;
 
+    // note:这里只会打印0-9
     int mord = mp[ord];
+    // std::cout << "mord: " << mord << ", mp[ord]: " << mp[ord] << std::endl;
+
+    //滑窗存IMU系点
     if(layer < max_layer)
       sw->points[mord].push_back(pv);
+    //滑窗存点簇
     sw->pcrs_local[mord].push(pv.pnt);
+
+    // ?:世界系点存到pcr_add
     pcr_add.push(pw);
+
+    // 输入IMU系下点的协方差、世界坐标，计算该点对voxel不确定性，累加
     Eigen::Matrix<double, 9, 9> Bi;
     Bf_var(pv, Bi, pw);
     cov_add += Bi;
@@ -1018,8 +1054,17 @@ public:
     return (eig_values[0] < min_eigen_value && (eig_values[0]/eig_values[2])<plane_eigen_value_thre[layer]);
   }
 
+  /**
+   * @brief
+   *
+   * @param ord  当前点来自滑窗中的 第几帧
+   * @param pv   点在IMU系 + 协方差
+   * @param pw   同一个点在世界坐标系
+   * @param sws  SlideWindow 对象池
+   */
   void allocate(int ord, const pointVar &pv, const Eigen::Vector3d &pw, vector<SlideWindow*> &sws)
   {
+    // 当前为叶节点
     if(octo_state == 0)
     {
       push(ord, pv, pw, sws);
@@ -1033,7 +1078,7 @@ public:
 
       if(leaves[leafnum] == nullptr)
       {
-        leaves[leafnum] = new OctoTree(layer+1, wdsize); 
+        leaves[leafnum] = new OctoTree(layer+1, wdsize);
         leaves[leafnum]->voxel_center[0] = voxel_center[0] + (2*xyz[0]-1)*quater_length;
         leaves[leafnum]->voxel_center[1] = voxel_center[1] + (2*xyz[1]-1)*quater_length;
         leaves[leafnum]->voxel_center[2] = voxel_center[2] + (2*xyz[2]-1)*quater_length;
@@ -1128,10 +1173,10 @@ public:
     {
       Eigen::Matrix3d ukl = u[k] * u[l].transpose();
       Eigen::Matrix<double, 1, 9> fkl;
-      fkl.head(6) << ukl(0, 0), ukl(1, 0)+ukl(0, 1), ukl(2, 0)+ukl(0, 2), 
+      fkl.head(6) << ukl(0, 0), ukl(1, 0)+ukl(0, 1), ukl(2, 0)+ukl(0, 2),
                      ukl(1, 1), ukl(1, 2)+ukl(2, 1),           ukl(2, 2);
       fkl.tail(3) = -(u[k].dot(plane.center) * u[l] + u[l].dot(plane.center) * u[k]);
-      
+
       u_c += nv / (eig_value[l]-eig_value[k]) * u[k] * fkl;
     }
 
@@ -1170,7 +1215,7 @@ public:
         else if(layer >= max_layer)
           return;
       }
-      
+
       if(pcr_fix.N != 0)
       {
         fix_divide(sws);
@@ -1220,7 +1265,7 @@ public:
         eig_value  = vox_opt.eig_values[opt_state];
         eig_vector = vox_opt.eig_vectors[opt_state];
         opt_state = -1;
-        
+
         for(int i=0; i<mgsize; i++)
         if(sw->pcrs_local[mp[i]].N != 0)
         {
@@ -1243,7 +1288,7 @@ public:
           eig_value = saes.eigenvalues();
           eig_vector = saes.eigenvectors();
         }
-        
+
       }
 
       if(pcr_fix.N < max_points && plane.is_plane)
@@ -1272,7 +1317,7 @@ public:
         for(int i=0; i<mgsize; i++)
           if(pcrs_world[i].N != 0)
             pcr_add -= pcrs_world[i];
-        
+
         if(point_fix.size() != 0)
           PVec().swap(point_fix);
       }
@@ -1283,12 +1328,12 @@ public:
         sw->pcrs_local[mp[i]].clear();
         sw->points[mp[i]].clear();
       }
-      
+
       if(pcr_fix.N >= pcr_add.N)
         isexist = false;
       else
         isexist = true;
-      
+
       mVox.unlock();
     }
     else
@@ -1423,7 +1468,7 @@ public:
       Eigen::Matrix3d eig_vectors = saes.eigenvectors();
       Eigen::Vector3d eig_values  = saes.eigenvalues();
 
-      PointType ap; 
+      PointType ap;
       // ap.intensity = ins;
 
       if(plane.is_plane)
@@ -1501,12 +1546,27 @@ public:
 
 };
 
-void cut_voxel(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec, int win_count, unordered_map<VOXEL_LOC, OctoTree*> &feat_tem_map, int wdsize, PLV(3) &pwld, vector<SlideWindow*> &sws)
+/**
+ * @brief 点 → 体素 → Octree → 滑窗
+ *
+ */
+// void cut_voxel(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec, int win_count, unordered_map<VOXEL_LOC, OctoTree*> &feat_tem_map, int wdsize, PLV(3) &pwld, vector<SlideWindow*> &sws)
+void cut_voxel(
+  unordered_map<VOXEL_LOC, OctoTree*> &feat_map,       //全局体素地图
+  PVecPtr pvec,                                        //去畸变点云(IMU系)
+  int win_count,                                       //滑窗索引计数
+  unordered_map<VOXEL_LOC, OctoTree*> &feat_tem_map,   //当前滑窗用到的体素子集
+  int wdsize,                                          //滑窗大小，用于 OctoTree / SlideWindow 初始化
+  PLV(3) &pwld,                                        //当前帧世界系
+  vector<SlideWindow*> &sws)                           //滑窗结构，用于体素内部管理多帧点
 {
   int plsize = pvec->size();
+  //遍历当前帧的每一个点
   for(int i=0; i<plsize; i++)
   {
     pointVar &pv = (*pvec)[i];
+
+    //根据世界系坐标计算体素索引
     Eigen::Vector3d &pw = pwld[i];
     float loc[3];
     for(int j=0; j<3; j++)
@@ -1514,11 +1574,13 @@ void cut_voxel(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec, int 
       loc[j] = pw[j] / voxel_size;
       if(loc[j] < 0) loc[j] -= 1;
     }
-
     VOXEL_LOC position(loc[0], loc[1], loc[2]);
+
+    //在全局体素地图中查找该体素
     auto iter = feat_map.find(position);
-    if(iter != feat_map.end())
+    if(iter != feat_map.end())    //体素已存在
     {
+      //step:向已有 OctoTree 中加入当前点
       iter->second->allocate(win_count, pv, pw, sws);
       iter->second->isexist = true;
       if(feat_tem_map.find(position) == feat_map.end())
@@ -1536,16 +1598,22 @@ void cut_voxel(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec, int 
       feat_tem_map[position] = ot;
     }
   }
-  
+
 }
 
 // Cut the current scan into corresponding voxel in multi thread
+// 将当前帧（或一帧滑窗内）的点云，按体素划分到 OctoTree 中，并在体素级别并行地把点分配到各自的 SlideWindow，为后续滑窗优化做准备
+//feat_map       全局体素地图
+//feat_tem_map   当前帧涉及到的体素
 void cut_voxel_multi(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec, int win_count, unordered_map<VOXEL_LOC, OctoTree*> &feat_tem_map, int wdsize, PLV(3) &pwld, vector<vector<SlideWindow*>> &sws)
 {
   unordered_map<OctoTree*, vector<int>> map_pvec;
   int plsize = pvec->size();
+
+  //遍历当前帧所有点
   for(int i=0; i<plsize; i++)
   {
+    // step:计算当前点所属的体素坐标
     pointVar &pv = (*pvec)[i];
     Eigen::Vector3d &pw = pwld[i];
     float loc[3];
@@ -1556,27 +1624,32 @@ void cut_voxel_multi(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec
       if(loc[j] < 0) loc[j] -= 1;
     }
 
+    // step:查找或创建 OctoTree
     VOXEL_LOC position(loc[0], loc[1], loc[2]);
     auto iter = feat_map.find(position);
     OctoTree* ot = nullptr;
+    // 体素已经存在
     if(iter != feat_map.end())
     {
       iter->second->isexist = true;
+      // 若该体素尚未加入临时体素表，则加入，临时体素表用于本轮 recut / 更新
       if(feat_tem_map.find(position) == feat_map.end())
         feat_tem_map[position] = iter->second;
       ot = iter->second;
     }
-    else
+    else   //新体素
     {
-      ot = new OctoTree(0, wdsize);
-      ot->voxel_center[0] = (0.5+position.x) * voxel_size;
+      ot = new OctoTree(0, wdsize);                          //新建一个体素节点
+      ot->voxel_center[0] = (0.5+position.x) * voxel_size;   //计算该体素在世界坐标系下的中心位置
       ot->voxel_center[1] = (0.5+position.y) * voxel_size;
       ot->voxel_center[2] = (0.5+position.z) * voxel_size;
       ot->quater_length = voxel_size / 4.0;
+      //将新体素加入主地图和临时体素表
       feat_map[position] = ot;
       feat_tem_map[position] = ot;
     }
 
+    // 将当前点的索引加入该体素对应的点集合
     map_pvec[ot].push_back(i);
   }
 
@@ -1588,16 +1661,18 @@ void cut_voxel_multi(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec
   //   }
   // }
 
+  // 将 map 转为顺序数组，便于并行,octs 用顺序数组保存体素 + 点索引集合
   vector<pair<OctoTree *const, vector<int>>*> octs; octs.reserve(map_pvec.size());
   for(auto iter=map_pvec.begin(); iter!=map_pvec.end(); iter++)
     octs.push_back(&(*iter));
 
-  int thd_num = sws.size();
-  int g_size = octs.size();
+  int thd_num = sws.size();                //线程数
+  int g_size = octs.size();                //需要处理的体素数量
   if(g_size < thd_num) return;
-  vector<thread*> mthreads(thd_num);
-  double part = 1.0 * g_size / thd_num;
+  vector<thread*> mthreads(thd_num);       //线程指针数组
+  double part = 1.0 * g_size / thd_num;    //每个线程负责的体素区间大小
 
+  //从 sws[0] 中平均分配 SlideWindow 指针给各线程
   int swsize = sws[0].size() / thd_num;
   for(int i=1; i<thd_num; i++)
   {
@@ -1605,14 +1680,17 @@ void cut_voxel_multi(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec
     sws[0].erase(sws[0].end() - swsize, sws[0].end());
   }
 
+  //启动子线程
   for(int i=1; i<thd_num; i++)
   {
     mthreads[i] = new thread
     (
       [&](int head, int tail, vector<SlideWindow*> &sw)
       {
+        //遍历分配给该线程的体素
         for(int j=head; j<tail; j++)
         {
+          //遍历该体素中的所有点索引
           for(int k: octs[j]->second)
             octs[j]->first->allocate(win_count, (*pvec)[k], pwld[k], sw);
         }
@@ -1633,7 +1711,7 @@ void cut_voxel_multi(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVecPtr pvec
       mthreads[i]->join();
       delete mthreads[i];
     }
-    
+
   }
 
 }
@@ -1667,7 +1745,7 @@ void cut_voxel(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, PVec &pvec, int wd
       feat_map[position] = ot;
     }
   }
-  
+
 }
 
 // Match the point with the plane in the voxel map
