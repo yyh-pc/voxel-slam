@@ -306,13 +306,17 @@ void down_sampling_close(pcl::PointCloud<PointType> &pl_feat, double voxel_size)
 
 }
 
+/**
+ * @brief 点集的统计表示
+ *
+ */
 class PointCluster
 {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  Eigen::Matrix3d P;
-  Eigen::Vector3d v;
-  int N;
+  Eigen::Matrix3d P;      // Σ (p_i * p_i^T)
+  Eigen::Vector3d v;      // Σ p_i
+  int N;                  // 点数
 
   PointCluster()
   {
@@ -335,12 +339,14 @@ public:
     v += vec;
   }
 
+  //计算协方差矩阵
   Eigen::Matrix3d cov()
   {
     Eigen::Vector3d center = v / N;
     return P/N - center*center.transpose();
   }
 
+  //合并两个点集
   PointCluster & operator+=(const PointCluster &sigv)
   {
     this->P += sigv.P;
@@ -350,6 +356,7 @@ public:
     return *this;
   }
 
+  //减去一个点集
   PointCluster & operator-=(const PointCluster &sigv)
   {
     this->P -= sigv.P;
@@ -359,6 +366,7 @@ public:
     return *this;
   }
 
+  //统计量的坐标系转换
   void transform(const PointCluster &sigv, const IMUST &stat)
   {
     N = sigv.N;

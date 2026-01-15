@@ -563,7 +563,6 @@ public:
     }
   }
 
-  //int motion_init(vector<pcl::PointCloud<PointType>::Ptr> &pl_origs, vector<deque<sensor_msgs::Imu::Ptr>> &vec_imus, vector<double> &beg_times, Eigen::MatrixXd *hess, LidarFactor &voxhess, vector<IMUST> &x_buf, unordered_map<VOXEL_LOC, OctoTree*> &surf_map, unordered_map<VOXEL_LOC, OctoTree*> &surf_map_slide, vector<PVecPtr> &pvec_buf, int win_size, vector<vector<SlideWindow*>> &sws, IMUST &x_curr, deque<IMU_PRE*> &imu_pre_buf, IMUST &extrin_para)
   int motion_init(
     vector<pcl::PointCloud<PointType>::Ptr> &pl_origs,           // 滑窗 LiDAR 原始点云
     vector<deque<sensor_msgs::Imu::Ptr>> &vec_imus,              // 对应每帧的 IMU 数据
@@ -910,10 +909,8 @@ public:
   // The point-to-plane alignment for odometry
   bool lio_state_estimation(PVecPtr pptr)
   {
-    // IMU 预测状态
-    IMUST x_prop = x_curr;
-    // 最多迭代4次
-    const int num_max_iter = 4;
+    IMUST x_prop = x_curr;                                    // IMU 预测状态
+    const int num_max_iter = 4;                               // 最多迭代4次
     bool EKF_stop_flg = 0, flg_EKF_converged = 0;
     Eigen::Matrix<double, DIM, DIM> G, H_T_H, I_STATE;
     G.setZero(); H_T_H.setZero(); I_STATE.setIdentity();
@@ -939,6 +936,7 @@ public:
       {
         pointVar &pv = pptr->at(i);
         Eigen::Matrix3d phat = hat(pv.pnt);
+        // todo:这里貌似存在一些争议：https://github.com/hku-mars/VoxelMap/issues/15
         Eigen::Matrix3d var_world = x_curr.R * pv.var * x_curr.R.transpose() + phat * rot_var * phat.transpose() + tsl_var;
         Eigen::Vector3d wld = x_curr.R * pv.pnt + x_curr.p;
 
@@ -1272,7 +1270,7 @@ public:
     x_curr.v = dx.R * x_curr.v;
     x_curr.g = x_buf[win_count-1].g;
 
-    //?:初始化 mp 映射索引
+    // 初始化 mp 映射索引
     for(int i=0; i<win_size; i++)
       mp[i] = i;
 
@@ -1300,38 +1298,50 @@ public:
     for(auto iter=surf_map.begin(); iter!=surf_map.end(); ++iter)
       iter->second->recut(win_count, x_buf, sws[0]);
 
-    //?:重力更新状态机
+    //note:重力更新状态机
     if(g_update == 1) g_update = 2;
     loop_detect = 0;
     double t2 = ros::Time::now().toSec();
     printf("loop head: %lf %zu\n", t2 - t1, sws[0].size());
   }
 
-  // load the previous keyframe in the local voxel map
+  /**
+   * @brief load the previous keyframe in the local voxel map
+   * 从历史关键帧中，选取一个空间上靠近当前位姿的旧关键帧，将其点云重新变换到当前世界坐标系下
+   * 并切分到当前的局部体素地图 surf_map 中，用于局部优化或匹配
+   * @param jour
+   */
   void keyframe_loading(double jour)
   {
     if(history_kfsize <= 0) return;
     double tt1 = ros::Time::now().toSec();
+
+    // 当前帧位置
     PointType ap_curr;
     ap_curr.x = x_curr.p[0];
     ap_curr.y = x_curr.p[1];
     ap_curr.z = x_curr.p[2];
     vector<int> vec_idx;
     vector<float> vec_dis;
+
+    // 关键帧搜索(10m、关键帧索引、关键帧距离)
     kd_keyframes.radiusSearch(ap_curr, 10, vec_idx, vec_dis);
 
+    // 遍历命中的关键帧
     for(int id: vec_idx)
     {
-      int ord_kf = pl_kdmap->points[id].curvature;
       if(keyframes->at(id)->exist)
       {
         Keyframe &kf = *(keyframes->at(id));
         IMUST &xx = kf.x0;
-        PVec pvec; pvec.reserve(kf.plptr->size());
+        PVec pvec;
+        pvec.reserve(kf.plptr->size());
 
-        pointVar pv; pv.var.setZero();
+        pointVar pv;
+        pv.var.setZero();
         int plsize = kf.plptr->size();
-        // for(int j=0; j<plsize; j+=2)
+
+        // 将关键帧点云从关键帧坐标系 → 世界坐标系
         for(int j=0; j<plsize; j++)
         {
           PointType ap = kf.plptr->points[j];
@@ -1341,9 +1351,19 @@ public:
         }
 
         cut_voxel(surf_map, pvec, win_size, jour);
-        kf.exist = 0;
-        history_kfsize--;
-        break;
+
+        // === debug: 关键帧加载打印 ===
+        std::cout << "[KeyframeLoading] load history keyframe id=" << id
+                << ", points=" << plsize
+                << ", pos=(" << xx.p[0] << ", " << xx.p[1] << ", " << xx.p[2] << ")"
+                << ", jour=" << jour
+                << ", remain=" << history_kfsize - 1
+                << std::endl;
+
+        // note:这意味着一个历史关键帧，终生只会被加载一次
+        kf.exist = 0;       // 标记该关键帧已被使用
+        history_kfsize--;   // 剩余历史关键帧数量减一
+        break;              // 一次调用只加载一个关键帧
       }
     }
 
@@ -1417,7 +1437,6 @@ public:
     if(win_count >= win_size)
     {
       // 初始化核心函数
-      //is_success = Initialization::instance().motion_init(pl_origs, vec_imus, beg_times, &hess, voxhess, x_buf, surf_map, surf_map_slide, pvec_buf, win_size, sws, x_curr, imu_pre_buf, extrin_para);
       is_success = Initialization::instance().motion_init(
         pl_origs,         // 滑窗内的原始 LiDAR 点云
         vec_imus,         // 每帧对应的 IMU 数据队列
@@ -1472,11 +1491,20 @@ public:
     ROS_WARN("Reset");
   }
 
-  // After local BA, update the map and marginalize the points of oldest scan
-  // multi means multiple thread
-  //note:滑窗边缘化
+
+  /**
+   * @brief 多线程实现：负责在局部 BA优化后，对滑动窗口地图进行滑窗边缘化
+   *
+   * @param feat_map  局部滑窗地图
+   * @param jour      累积里程
+   * @param win_count 当前滑窗大小
+   * @param xs        滑窗状态
+   * @param voxopt    滑窗的lidarBA优化因子
+   * @param sw        全局滑窗池sws[0]
+   */
   void multi_margi(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, double jour, int win_count, vector<IMUST> &xs, LidarFactor &voxopt, vector<SlideWindow*> &sw)
   {
+    // note:这里是单线程实现
     // for(auto iter=feat_map.begin(); iter!=feat_map.end();)
     // {
     //   iter->second->jour = jour;
@@ -1491,6 +1519,7 @@ public:
     // }
     // return;
 
+    // 按线程分配体素
     int thd_num = thread_num;
     vector<vector<OctoTree*>*> octs;
     for(int i=0; i<thd_num; i++)
@@ -1503,16 +1532,18 @@ public:
     int cnt = 0;
     for(auto iter=feat_map.begin(); iter!=feat_map.end(); iter++)
     {
-      iter->second->jour = jour;
+      iter->second->jour = jour;              //更新当前滑窗地图的体素的jour为当前位姿所处的jour
       octs[cnt]->push_back(iter->second);
       if(octs[cnt]->size() >= part && cnt < thd_num-1)
         cnt++;
     }
 
+    // 遍历一个线程负责的体素，调用每个体素的 margi
     auto margi_func = [](int win_cnt, vector<OctoTree*> *oct, vector<IMUST> xxs, LidarFactor &voxhess)
     {
       for(OctoTree *oc: *oct)
       {
+        //note:边缘化核心函数
         oc->margi(win_cnt, 1, xxs, voxhess);
       }
     };
@@ -1522,6 +1553,7 @@ public:
       mthreads[i] = new thread(margi_func, win_count, octs[i], xs, ref(voxopt));
     }
 
+    //启动多线程执行边缘化
     for(int i=0; i<thd_num; i++)
     {
       if(i == 0)
@@ -1535,6 +1567,8 @@ public:
       }
     }
 
+    //note:每次边缘化完成后会遍历滑动窗口地图，清理空体素，回收滑窗数据结构
+    //?:那边缘化之后surf_map中的空体素会回收吗
     for(auto iter=feat_map.begin(); iter!=feat_map.end();)
     {
       if(iter->second->isexist)
@@ -1546,24 +1580,24 @@ public:
       }
     }
 
+    // 释放线程分配列表,防止内存泄漏
     for(int i=0; i<thd_num; i++)
       delete octs[i];
 
   }
 
-  // Determine the plane and recut the voxel map in octo-tree
-  // note:对 feat_map 中的所有体素 OctoTree 进行平面重新计算（recut）。
-  // 更新每个体素内部的点到滑动窗口 sws。
-  // 将体素数据传递给 Lidar 优化器 voxopt。
-  // 多线程处理加速大规模体素计算。
+  /**
+   * @brief 对滑窗内所有体素，重新计算平面结构与残差，并将优化项累积到 LidarFactor（Hessian）中
+   *
+   * @param feat_map
+   * @param win_count
+   * @param xs
+   * @param voxopt
+   * @param sws
+   */
   void multi_recut(unordered_map<VOXEL_LOC, OctoTree*> &feat_map, int win_count, vector<IMUST> &xs, LidarFactor &voxopt, vector<vector<SlideWindow*>> &sws)
   {
-    // for(auto iter=feat_map.begin(); iter!=feat_map.end(); iter++)
-    // {
-    //   iter->second->recut(win_count, xs, sws[0]);
-    //   iter->second->tras_opt(voxopt);
-    // }
-
+    // 体素任务均分给5个线程
     int thd_num = thread_num;
     vector<vector<OctoTree*>> octss(thd_num);
     int g_size = feat_map.size();
@@ -1578,6 +1612,7 @@ public:
         cnt++;
     }
 
+    // note:每个线程执行的核心函数
     auto recut_func = [](int win_count, vector<OctoTree*> &oct, vector<IMUST> xxs, vector<SlideWindow*> &sw)
     {
       for(OctoTree *oc: oct)
@@ -1591,6 +1626,7 @@ public:
 
     for(int i=0; i<thd_num; i++)
     {
+      // 主线程也执行，避免空转
       if(i == 0)
       {
         recut_func(win_count, octss[i], xs, sws[i]);
@@ -1602,35 +1638,30 @@ public:
       }
     }
 
+    // note:SlideWindow 的线程回收机制, 所有回收的滑窗最终集中回 sws[0]，供后续帧复用
     for(int i=1; i<sws.size(); i++)
     {
       sws[0].insert(sws[0].end(), sws[i].begin(), sws[i].end());
       sws[i].clear();
     }
 
+    //note:体素将约束写入 LidarFactor
     for(auto iter=feat_map.begin(); iter!=feat_map.end(); iter++)
       iter->second->tras_opt(voxopt);
 
   }
 
   // The main thread of odometry and local mapping
-  // note:里程计+局部建图模块
+  // note:初始化+里程计+局部建图模块
   void thd_odometry_localmapping(ros::NodeHandle &n)
   {
     PLV(3) pwld;                            // 当前帧在世界系下的点云（用于可视化/发布）
-    // double down_sizes[3] = {0.1, 0.2, 0.4}; // nouse:多分辨率 voxel 下采样尺寸
     Eigen::Vector3d last_pos(0, 0 ,0);      // 上一次累计里程的位置，用于跟踪累积行驶距离jour
     double jour = 0;
-    // int counter = 0;                     // nouse
 
     pcl::PointCloud<PointType>::Ptr pcl_curr(new pcl::PointCloud<PointType>());   // 当前帧同步得到的原始点云
 
     int motion_init_flag = 1;                                                     // 是否处于初始化阶段
-
-
-    // vector<pcl::PointCloud<PointType>::Ptr> pl_origs;
-    // vector<double> beg_times;
-    // vector<deque<sensor_msgs::Imu::Ptr>> vec_imus;
 
     bool release_flag = false;                // 触发历史地图释放
     int degrade_cnt = 0;                      // 退化计数器，用于系统reset
@@ -1752,6 +1783,7 @@ public:
         // EKF预测、点云运动补偿
         if(odom_ekf.process(x_curr, *pcl_curr, imus) == 0)
           continue;
+
         // 点云降采样
         pcl::PointCloud<PointType> pl_down = *pcl_curr;
         down_sampling_voxel(pl_down, down_size);
@@ -1762,8 +1794,8 @@ public:
           down_sampling_voxel(pl_down, down_size / 2);
         }
 
+        // 计算每个点的协方差，点云根据外参转到IMU系下
         PVecPtr pptr(new PVec);
-        // 计算每个点的协方差，点云转到世界坐标系下
         var_init(extrin_para, pl_down, pptr, dept_err, beam_err);
 
         // 基于点到平面残差的 LiDAR–IMU 紧耦合里程计更新函数，包含退化检测判定
@@ -1781,10 +1813,11 @@ public:
 
         t1 = ros::Time::now().toSec();
 
-        // note:当前帧进入窗口帧
+        // 当前帧进入窗口帧
         win_count++;
         x_buf.push_back(x_curr);
         pvec_buf.push_back(pptr);
+
         // IMU预积分帧间约束构建
         if(win_count > 1)
         {
@@ -1792,17 +1825,20 @@ public:
           imu_pre_buf[win_count-2]->push_imu(imus);
         }
 
-        // 根据欧式距离加载一帧历史关键帧，并没有时间上的考量
+        // note: 根据累计行驶距离jour，按关键帧间距策略加载一帧历史关键帧，并将其点云切分并注册到全局地图surf_map中
+        // note: 当前帧及滑窗阶段使用 surf_map_slide 作为局部地图,是从surf_map的按需拷贝，所以这里关键帧只要切分进surf_map即可
         keyframe_loading(jour);
+
         // 初始化LidarBA优化因子
-        voxhess.clear(); voxhess.win_size = win_size;
+        voxhess.clear();
+        voxhess.win_size = win_size;
 
         // cut_voxel(surf_map, pvec_buf[win_count-1], win_count-1, surf_map_slide, win_size, pwld, sws[0]);
-        // 多线程实现：将当前帧点云 pvec 中的每个点按照其世界坐标划分到对应体素
+        // note:多线程实现体素切分：将当前帧点云的每个点按照其世界坐标划分到全局地图的对应体素
         cut_voxel_multi(surf_map, pvec_buf[win_count-1], win_count-1, surf_map_slide, win_size, pwld, sws);
         t2 = ros::Time::now().toSec();
 
-        // 重新计算滑窗内所有帧对体素平面的约束，并累积 Hessian
+        // note:多线程实现[滑窗内体素]内重建平面约束 + LidarBA优化因子构建
         multi_recut(surf_map_slide, win_count, x_buf, voxhess, sws);
         t3 = ros::Time::now().toSec();
 
@@ -1812,7 +1848,8 @@ public:
           degrade_cnt = 0;
           system_reset(imus);
 
-          last_pos = x_curr.p; jour = 0;
+          last_pos = x_curr.p;
+          jour = 0;
 
           mtx_loop.lock();
           buf_lba2loop_tem.swap(buf_lba2loop);
@@ -1826,11 +1863,11 @@ public:
         }
       }
 
-      // 窗口已满，可以做联合优化
+      // step:10帧滑窗已满，可以做局部BA优化
       if(win_count >= win_size)
       {
         t4 = ros::Time::now().toSec();
-        // 优化重力的BA
+        // ?:优化重力的BA(看了一下好像是只有跨session回环的时候才会执行优化重力的版本)
         if(g_update == 2)
         {
           LI_BA_OptimizerGravity opt_lsv;
@@ -1843,19 +1880,24 @@ public:
         // 标准 LIO 滑窗 BA
         else
         {
+          //note:核心局部BA函数，输出更新后的位姿和hess
           LI_BA_Optimizer opt_lsv;
           opt_lsv.damping_iter(x_buf, voxhess, imu_pre_buf, &hess);
         }
 
-        // note:把最老帧送入回环线程
-        ScanPose *bl = new ScanPose(x_buf[0], pvec_buf[0]);
-        bl->v6 = hess.block<6, 6>(0, DIM).diagonal();
-        for(int i=0; i<6; i++) bl->v6[i] = 1.0 / fabs(bl->v6[i]);
+        // step:把滑动窗口的第一帧送入回环线程
+        ScanPose *bl = new ScanPose(x_buf[0], pvec_buf[0]);    //创建当前窗口的第一帧ScanPose对象，记录位姿和点云(IMU系)
+
+        bl->v6 = hess.block<6, 6>(0, DIM).diagonal();          //提取 Hessian 的 6×6 对角块，并取倒数（用于权重或信息量衡量）
+        for(int i=0; i<6; i++)
+          bl->v6[i] = 1.0 / fabs(bl->v6[i]);
+
+        // 将 bl 加入循环优化队列 buf_lba2loop,会与回环模块进行数据交互
         mtx_loop.lock();
-        // 这里是局部建图模块与回环模块的数据流交互
         buf_lba2loop.push_back(bl);
         mtx_loop.unlock();
 
+        //更新当前状态的位姿
         x_curr.R = x_buf[win_count-1].R;
         x_curr.p = x_buf[win_count-1].p;
         t5 = ros::Time::now().toSec();
@@ -1863,9 +1905,10 @@ public:
         // 发布局部地图
         ResultOutput::instance().pub_localmap(mgsize, sessionNames.size()-1, pvec_buf, x_buf, pcl_path, win_base, win_count);
 
-        // 滑动窗口边缘化
+        // step:滑动窗口边缘化
         multi_margi(surf_map_slide, jour, win_count, x_buf, voxhess, sws[0]);
         t6 = ros::Time::now().toSec();
+
         // 定期更新里程计里程 jour，用于跟踪累计移动距离，每处理 10 帧点云时触发一次检查
         if((win_base + win_count) % 10 == 0)
         {
