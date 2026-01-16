@@ -1205,7 +1205,7 @@ public:
   // note:回环检测成功之后，对全系统位姿同步更新+重建自适应体素地图（位姿图中的5个最新关键帧+边缘化帧+滑动窗口帧）
   void loop_update()
   {
-    printf("loop update: %zu\n", sws[0].size());
+    // printf("start loop update, sws[0].size is %zu\n", sws[0].size());
     double t1 = ros::Time::now().toSec();
     //step:释放旧的 surf_map 中的 OctoTree
     for(auto iter=surf_map.begin(); iter!=surf_map.end(); iter++)
@@ -1221,7 +1221,15 @@ public:
     surf_map = map_loop;
     map_loop.clear();
 
-    printf("scanPoses: %zu %zu %zu %d %d %zu\n", scanPoses->size(), buf_lba2loop.size(), x_buf.size(), win_base, win_count, sws[0].size());
+    // printf("scanPoses: %zu %zu %zu %d %d %zu\n", scanPoses->size(), buf_lba2loop.size(), x_buf.size(), win_base, win_count, sws[0].size());
+    std::cout << "[loop_update]\n"
+            << "  scanPoses.size      = " << scanPoses->size() << '\n'
+            << "  buf_lba2loop.size   = " << buf_lba2loop.size() << '\n'
+            << "  x_buf.size          = " << x_buf.size() << '\n'
+            << "  win_base            = " << win_base << '\n'
+            << "  win_count           = " << win_count << '\n'
+            << "  sws[0].size         = " << sws[0].size() << '\n'
+            << std::endl;
 
     //重建整条轨迹（历史所有帧）
     int blsize = scanPoses->size();
@@ -1301,8 +1309,12 @@ public:
     //note:重力更新状态机
     if(g_update == 1) g_update = 2;
     loop_detect = 0;
+
     double t2 = ros::Time::now().toSec();
-    printf("loop head: %lf %zu\n", t2 - t1, sws[0].size());
+    std::cout << "[Loop Update Complete] time(s)=" << (t2 - t1)
+          << ", sws[0].size=" << sws[0].size()
+          << std::endl;
+
   }
 
   /**
@@ -1313,7 +1325,9 @@ public:
    */
   void keyframe_loading(double jour)
   {
-    if(history_kfsize <= 0) return;
+    if(history_kfsize <= 0)
+      return;
+
     double tt1 = ros::Time::now().toSec();
 
     // 当前帧位置
@@ -1827,6 +1841,7 @@ public:
 
         // note: 根据累计行驶距离jour，按关键帧间距策略加载一帧历史关键帧，并将其点云切分并注册到全局地图surf_map中
         // note: 当前帧及滑窗阶段使用 surf_map_slide 作为局部地图,是从surf_map的按需拷贝，所以这里关键帧只要切分进surf_map即可
+        // note: 只有发生回环检测与全局优化时历史关键帧队列才会更新，不为空
         keyframe_loading(jour);
 
         // 初始化LidarBA优化因子
@@ -2062,9 +2077,11 @@ public:
     double ratio_drift = 0.05;
     int curr_halt = 10, prev_halt = 30;
     int isHighFly = 0;
+    double drift_threshold = 0.1;
     n.param<double>("Loop/jud_default", jud_default, 0.45);    // STDesc 匹配置信度阈值
     n.param<double>("Loop/icp_eigval", icp_eigval, 14);        // ICP 法向退化判断阈值
     n.param<double>("Loop/ratio_drift", ratio_drift, 0.05);    // 漂移 / 距离 比例阈值
+    n.param<double>("Loop/drift_threshold", drift_threshold, 0.1);
     n.param<int>("Loop/curr_halt", curr_halt, 10);             // 当前 session 回环触发抑制
     n.param<int>("Loop/prev_halt", prev_halt, 30);             // 历史 session 回环抑制
     n.param<int>("Loop/isHighFly", isHighFly, 0);              // isHighFly 通常用于 UAV / 高速场景
@@ -2280,6 +2297,9 @@ public:
       keyframes->push_back(smp);
       mtx_keyframe.unlock();
 
+      //note:关键帧ID是按10进行递增的
+      //std::cout << "new keyframe generate id: " << smp->id << ", jour: " << smp->jour << std::endl;
+
       //note:这里正式进入回环检测流程
       //step:STDesc 回环描述子生成
       vector<STD> stds_vec;
@@ -2309,8 +2329,7 @@ public:
 
         if(search_result.first >= 0)
         {
-          printf("Find Loop in session%d: %d %d\n", id, buf_base, search_result.first);
-          printf("score: %lf\n", search_result.second);
+          std::cout << "Find Loop in session" << id << ": " << buf_base << " " << search_result.first << "score: " << search_result.second << std::endl;
         }
 
         // 描述子匹配得分阈值过滤
@@ -2333,9 +2352,9 @@ public:
             {
               //计算两个关键帧之间的实际运动尺度
               double span = smp->jour - keyframes->at(search_result.first)->jour;
-              printf("drift: %lf %lf\n", drift_p, span);
+              std::cout << "drift: " << drift_p << ", span: " << span << std::endl;
 
-              // 漂移相对运动距离足够小，接受该回环
+              // 漂移相对运动距离足够小，接受该回环(小于1%)
               if(drift_p / span < ratio_drift)
               {
                 isPush = true;
@@ -2343,7 +2362,7 @@ public:
                 step = stepsizes.size() - 2;
 
                 //不是每个回环都优化，足够久没优化 + 漂移明显时优化
-                if(relc_counts[id] > curr_halt && drift_p > 0.10)
+                if(relc_counts[id] > curr_halt && drift_p > drift_threshold)
                 {
                   isOpt = true;
                   for(int &cnt: relc_counts) cnt = 0;
@@ -2354,7 +2373,8 @@ public:
                     << "[LoopOpt Skip] "
                     << "id=" << id
                     << " relc_count=" << relc_counts[id] << "/" << curr_halt
-                    << " drift_p=" << drift_p << " (th=0.10)"
+                    << " drift_p=" << drift_p
+                    << " drift_threshold=" << drift_threshold
                     << std::endl;
 
                 }
@@ -2438,10 +2458,28 @@ public:
               }
             }
 
+            // rviz可视化当前帧与历史回环帧点云
             // if(isPush)
             // {
-            //   icp_check(*(smp->plptr), *(std_managers[id]->plane_cloud_vec_[search_result.first]), pub_test, pub_init, loop_transform, multimap_scanPoses[id]->at(ord_bl)->x);
+            //   icp_check(*(smp->plptr), *(std_managers[id]->plane_cloud_vec_[search_result.first]), pub_loop_current, pub_loop_history, loop_transform, multimap_scanPoses[id]->at(ord_bl)->x);
             // }
+
+            if(isPush)
+            {
+              auto &cur_cloud  = *(smp->plptr);
+              auto &hist_cloud = *(std_managers[id]->plane_cloud_vec_[search_result.first]);
+
+              std::cout << "  current frame : " << cur_cloud.points.size() << std::endl;
+              std::cout << "  history frame : " << hist_cloud.points.size() << std::endl;
+
+              icp_check(
+                cur_cloud,
+                hist_cloud,
+                pub_loop_current,
+                pub_loop_history,
+                loop_transform,
+                multimap_scanPoses[id]->at(ord_bl)->x);
+            }
 
           }
         }
@@ -3031,7 +3069,9 @@ int main(int argc, char **argv)
   pub_pmap = n.advertise<sensor_msgs::PointCloud2>("/map_pmap", 100);         //和全局建图相关
   pub_scan = n.advertise<sensor_msgs::PointCloud2>("/map_scan", 100);         //里程计扫描帧发布（初始化也会发布）
   pub_init = n.advertise<sensor_msgs::PointCloud2>("/map_init", 100);         //初始化地图
-  pub_test = n.advertise<sensor_msgs::PointCloud2>("/map_test", 100);         //no use
+  //pub_test = n.advertise<sensor_msgs::PointCloud2>("/map_test", 100);         //no use
+  pub_loop_current = n.advertise<sensor_msgs::PointCloud2>("/map_loop_current", 100);
+  pub_loop_history = n.advertise<sensor_msgs::PointCloud2>("/map_loop_history", 100);
   pub_curr_path = n.advertise<sensor_msgs::PointCloud2>("/map_path", 100);    //里程计轨迹
   pub_prev_path = n.advertise<sensor_msgs::PointCloud2>("/map_true", 100);
 

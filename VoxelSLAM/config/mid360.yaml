@@ -46,6 +46,8 @@ Loop:
   jud_default: 0.45
   icp_eigval: 9
   ratio_drift: 0.01
+  curr_halt: 50
+  drift_threshold: 0.01
 
 GBA:
   voxel_size: 2

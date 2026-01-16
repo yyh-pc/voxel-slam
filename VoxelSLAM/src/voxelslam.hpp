@@ -26,6 +26,7 @@ using namespace std;
 
 ros::Publisher pub_scan, pub_cmap, pub_init, pub_pmap;
 ros::Publisher pub_test, pub_prev_path, pub_curr_path;
+ros::Publisher pub_loop_current, pub_loop_history;
 ros::Subscriber sub_imu, sub_pcl;
 
 template <typename T>
@@ -309,6 +310,7 @@ void icp_check(pcl::PointCloud<PointType> &pl_src, pcl::PointCloud<PointType> &p
     ap.x = v[0]; ap.y = v[1]; ap.z = v[2];
     pl2.push_back(ap);
   }
-  pub_pl_func(pl1, pub_src); pub_pl_func(pl2, pub_tar);
+  pub_pl_func(pl1, pub_src);
+  pub_pl_func(pl2, pub_tar);
 }
 
